@@ -7,6 +7,7 @@
 #define LSR_DR    (1 << 0)
 #define LSR_TDRQ  (1 << 5)
 
+// Read input from uart
 char uart_getc() {
     while ((*UART_LSR & LSR_DR) == 0) {
 
@@ -19,7 +20,7 @@ char uart_getc() {
     return c;
 }
 
-
+// Print a character by uart
 void uart_putc(char c) {
     if (c == '\n')
         uart_putc('\r');
@@ -29,8 +30,7 @@ void uart_putc(char c) {
     *UART_THR = c;
 }
 
-
-
+// Print string by uart
 void uart_puts(const char* s) {
     while (*s != '\0') {
         uart_putc(*s);
@@ -38,6 +38,7 @@ void uart_puts(const char* s) {
     }
 }
 
+// Print hex number by uart
 void uart_hex(unsigned long h) {
     uart_puts("0x");
     unsigned long n;
