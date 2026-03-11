@@ -1,18 +1,19 @@
 #include "uart.h"
 
 #define UART_BASE 0xD4017000UL
-#define UART_RBR  (unsigned char*)(UART_BASE + 0x0)
-#define UART_THR  (unsigned char*)(UART_BASE + 0x0)
-#define UART_LSR  (unsigned char*)(UART_BASE + 0x14)
-#define LSR_DR    (1 << 0)
-#define LSR_TDRQ  (1 << 5)
+#define UART_RBR  (unsigned char*)(UART_BASE + 0x0)  // Receive Buffer Register
+#define UART_THR  (unsigned char*)(UART_BASE + 0x0)  // Transmit Holding Register
+#define UART_LSR  (unsigned char*)(UART_BASE + 0x14) // Line Status Register
+#define LSR_DR    (1 << 0) // Data Ready (In Receive Buffer Register)
+#define LSR_TDRQ  (1 << 5) // Transmit Data Request (Transferred from the Transmit Holding Register)
 
 // Read input from uart
 char uart_getc() {
+    // When data is in Receive Buffer Register
     while ((*UART_LSR & LSR_DR) == 0) {
 
     }
-    
+    // Get the character
     char c = *UART_RBR;
     
     if (c == '\r') 
@@ -24,9 +25,11 @@ char uart_getc() {
 void uart_putc(char c) {
     if (c == '\n')
         uart_putc('\r');
+    // When wanting to transmit data
     while ((*UART_LSR & LSR_TDRQ) == 0) {
 
     }
+    // Set the data in Transmit Holding Register
     *UART_THR = c;
 }
 

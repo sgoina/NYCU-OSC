@@ -23,13 +23,6 @@ void start_shell(){
                 uart_putc('\n');
                 break; 
             }
-            // backspace
-            else if (c == '\b' || c == 127) {
-                if (idx > 0) {
-                    idx--;
-                    uart_puts("\b \b");
-                }
-            }
             // other
             else if (idx < MAX_CMD_LEN - 1) {
                 buffer[idx++] = c;
@@ -41,17 +34,17 @@ void start_shell(){
             continue;
         // command "help"
         else if (strcmp(buffer, "help") == 0) {
-            uart_puts("Available commands:\r\n");
-            uart_puts("  help  - show all commands.\r\n");
-            uart_puts("  hello - print Hello World.\r\n");
-            uart_puts("  info  - print system info.\r\n");
+            uart_puts("Available commands:\n");
+            uart_puts("  help  - show all commands.\n");
+            uart_puts("  hello - print Hello World.\n");
+            uart_puts("  info  - print system info.\n");
         }
         // command "hello"
         else if (strcmp(buffer, "hello") == 0)
-            uart_puts("Hello World!\r\n");
+            uart_puts("Hello World!\n");
         // command "info"
         else if (strcmp(buffer, "info") == 0) {
-            uart_puts("System information:\r\n");
+            uart_puts("System information:\n");
             uart_puts("  OpenSBI specification version: ");
             uart_hex(sbi_get_spec_version());
             uart_putc('\n');
@@ -67,7 +60,7 @@ void start_shell(){
             uart_puts("Unknown command: ");
             uart_puts(buffer);
             uart_putc('\n');
-            uart_puts("Use help to get commands.\r\n");
+            uart_puts("Use help to get commands.\n");
         }
     }
 }

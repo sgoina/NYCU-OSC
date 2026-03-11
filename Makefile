@@ -6,6 +6,11 @@ OBJCOPY = $(RISCV_GNU)-objcopy
 INC_DIR = include
 SRC_DIR = src
 
+# -mcmodel=medany: can load anywhere in memory
+# -ffreestanding: Independent running (No int main(void))
+# -nostdlib: No common Libraries
+# -g: GNU Debugger
+# -Wall: Open all warning
 CFLAGS = -mcmodel=medany -ffreestanding -nostdlib -g -Wall -I$(INC_DIR)
 TARGET = kernel
 
