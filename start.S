@@ -12,4 +12,4 @@ clear_bss_loop:
 
 clear_bss_done: 
     la sp, _end
-    tail start_kernel      
+    tail start_boot_loader      

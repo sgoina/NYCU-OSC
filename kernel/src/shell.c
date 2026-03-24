@@ -1,10 +1,10 @@
 #include "shell.h"
 #include "sbi.h"
 #include "uart.h"
-#include "utils.h"
+#include "string.h"
 // Command length limit
 #define MAX_CMD_LEN 128
-#define KERNEL_LOAD_ADDR 0x00200000UL
+#define KERNEL_LOAD_ADDR 0x20000000UL
 
 void start_shell(){
     char buffer[MAX_CMD_LEN];
@@ -55,43 +55,6 @@ void start_shell(){
             uart_puts("  implementation version: ");
             uart_hex(sbi_get_impl_version());
             uart_putc('\n');
-        }
-        // command "load"
-        else if (strcmp(buffer, "load") == 0){
-            char* kernel_address = (char*)KERNEL_LOAD_ADDR;    // UART
-            unsigned int magic = 0;
-            unsigned int kernel_size = 0;
-
-            uart_puts("Please run the Python script for loading kernel...\n");
-
-            // check magic
-            for (int i = 0; i < 4; i++){
-                ((char*)&magic)[i] = uart_getc_raw();
-            }
-            if(magic != 0x544F4F42){
-                uart_puts("Error: magic number is not match.\n");
-                return;
-            }
-
-            // read kernel size
-            for (int i = 0; i < 4; i++){
-                ((char*)&kernel_size)[i] = uart_getc_raw();
-            }
-            uart_puts("Loading kernel, the Kernel Size: ");
-            uart_hex(kernel_size);
-            uart_puts("\n");
-
-            // 開始讀kernel
-            for (int i = 0; i < kernel_size; i++){
-                kernel_address[i] = uart_getc_raw();
-            }
-            uart_puts("Kernel loaded successfully! Jump to kernel");
-            uart_hex(KERNEL_LOAD_ADDR);
-            uart_putc('\n');
-
-            // function pointer
-            void (*kernel_entry)(void) = (void (*)(void))KERNEL_LOAD_ADDR;
-            kernel_entry();     // jump to kernel
         }
         // unknown command
         else {

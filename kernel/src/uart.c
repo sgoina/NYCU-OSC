@@ -1,11 +1,17 @@
 #include "uart.h"
 
-#define UART_BASE 0xD4017000UL
-#define UART_RBR  (unsigned char*)(UART_BASE + 0x0)  // Receive Buffer Register
-#define UART_THR  (unsigned char*)(UART_BASE + 0x0)  // Transmit Holding Register
-#define UART_LSR  (unsigned char*)(UART_BASE + 0x14) // Line Status Register
+unsigned long uart_base_addr = 0;
+
+#define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Receive Buffer Register
+#define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Transmit Holding Register
+#define UART_LSR  (volatile unsigned char*)(uart_base_addr + 0x14) // Line Status Register
 #define LSR_DR    (1 << 0) // Data Ready (In Receive Buffer Register)
 #define LSR_TDRQ  (1 << 5) // Transmit Data Request (Transferred from the Transmit Holding Register)
+
+
+void uart_init(unsigned long uart_address) {
+    uart_base_addr = uart_address;
+}
 
 // Read input from uart
 char uart_getc() {

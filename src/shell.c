@@ -1,12 +1,11 @@
 #include "shell.h"
-#include "sbi.h"
 #include "uart.h"
-#include "utils.h"
+#include "string.h"
 // Command length limit
 #define MAX_CMD_LEN 128
 #define KERNEL_LOAD_ADDR 0x20000000UL
 
-void start_shell(){
+void start_shell(unsigned long hartid, unsigned long dtb_ptr, unsigned int uart_reg){
     char buffer[MAX_CMD_LEN];
     int idx;
     char c;
@@ -37,28 +36,11 @@ void start_shell(){
         else if (strcmp(buffer, "help") == 0) {
             uart_puts("Available commands:\n");
             uart_puts("  help  - show all commands.\n");
-            uart_puts("  hello - print Hello World.\n");
-            uart_puts("  info  - print system info.\n");
-        }
-        // command "hello"
-        else if (strcmp(buffer, "hello") == 0)
-            uart_puts("Hello World!\n");
-        // command "info"
-        else if (strcmp(buffer, "info") == 0) {
-            uart_puts("System information:\n");
-            uart_puts("  OpenSBI specification version: ");
-            uart_hex(sbi_get_spec_version());
-            uart_putc('\n');
-            uart_puts("  implementation ID: ");
-            uart_hex(sbi_get_impl_id());
-            uart_putc('\n');
-            uart_puts("  implementation version: ");
-            uart_hex(sbi_get_impl_version());
-            uart_putc('\n');
+            uart_puts("  load  - load kernel image.\n");
         }
         // command "load"
         else if (strcmp(buffer, "load") == 0){
-            char* kernel_address = (char*)KERNEL_LOAD_ADDR;    // UART
+            char* kernel_address = (char*)KERNEL_LOAD_ADDR;
             unsigned int magic = 0;
             unsigned int kernel_size = 0;
 
@@ -81,7 +63,7 @@ void start_shell(){
             uart_hex(kernel_size);
             uart_puts("\n");
 
-            // 開始讀kernel
+            // Start to get kernel image
             for (int i = 0; i < kernel_size; i++){
                 kernel_address[i] = uart_getc_raw();
             }
@@ -90,8 +72,8 @@ void start_shell(){
             uart_putc('\n');
 
             // function pointer
-            void (*kernel_entry)(void) = (void (*)(void))KERNEL_LOAD_ADDR;
-            kernel_entry();     // jump to kernel
+            void (*kernel_entry)(unsigned long, unsigned long, unsigned int) = (void (*)(unsigned long, unsigned long, unsigned int))KERNEL_LOAD_ADDR;
+            kernel_entry(hartid, dtb_ptr, uart_reg);     // jump to kernel
         }
         // unknown command
         else {
