@@ -2,7 +2,7 @@
 #include "uart.h"
 #include "ramfs.h"
 
-void start_new_kernel(unsigned long hartid, unsigned long dtb_ptr) {
+void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     if (uart_init(dtb_ptr) != -1){
         uart_puts("New Kernel! New Kernel! New Kernel! New Kernel!\n");
         if (initrd_addr(dtb_ptr) != -1)

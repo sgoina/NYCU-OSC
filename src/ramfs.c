@@ -75,6 +75,27 @@ int initrd_addr(unsigned long dtb_ptr){
 
 void ls_filenames(){
     char *ptr = (char *)cpio_address;
+    int file_cnt = 0;
+    while (1){
+        struct cpio_t *header = (struct cpio_t *) ptr;
+        if (strncmp(header->magic, "070701", 6) != 0){
+            uart_puts("Error: magic number is not match.\n");
+            break;
+        }
+        int name_sz = hextoi(header->namesize, 8);
+        int file_sz = hextoi(header->filesize, 8);
+        const char *filename = ptr+ sizeof(struct cpio_t);
+        if (strcmp(filename, "TRAILER!!!") == 0)
+            break;
+        file_cnt++;
+        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // jump header + name + padding 1
+        int next_header_offset = align(content_offset + file_sz, 4); // jump header + name + padding 2
+        ptr += next_header_offset;
+    }
+    uart_puts("Total ");
+    uart_dec(file_cnt);
+    uart_puts(" files.\n");
+    ptr = (char *)cpio_address;
     while (1){
         struct cpio_t *header = (struct cpio_t *) ptr;
         if (strncmp(header->magic, "070701", 6) != 0){

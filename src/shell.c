@@ -6,7 +6,56 @@
 
 // Command length limit
 #define MAX_CMD_LEN 128
-#define KERNEL_LOAD_ADDR 0x20000000UL
+#define KERNEL_LOAD_ADDR 0x00200000UL
+#define RELOCATE_BASE 0x20000000UL
+#define BEFORE_BASE 0x00200000UL
+
+extern void relocate(unsigned long hartid, unsigned long dtb_ptr, void* continue_func);
+
+void load_kernel(unsigned long hartid, unsigned long dtb_ptr) {
+    char* kernel_address = (char*)KERNEL_LOAD_ADDR;
+    unsigned int magic = 0;
+    unsigned int kernel_size = 0;
+
+    uart_puts("Please run the Python script for loading kernel...\n");
+
+    // check magic
+    for (int i = 0; i < 4; i++){
+        ((char*)&magic)[i] = uart_getc_raw();
+    }
+    if(magic != 0x544F4F42){
+        uart_puts("Error: magic number is not match.\n");
+        return;
+    }
+
+    // read kernel size
+    for (int i = 0; i < 4; i++){
+        ((char*)&kernel_size)[i] = uart_getc_raw();
+    }
+    uart_puts("Loading kernel, the Kernel Size: ");
+    uart_hex(kernel_size);
+    uart_puts("\n");
+
+    // Start to get kernel image
+    for (int i = 0; i < kernel_size; i++){
+        kernel_address[i] = uart_getc_raw();
+    }
+    uart_puts("Kernel loaded successfully! Jump to kernel: ");
+    uart_hex(KERNEL_LOAD_ADDR);
+    uart_putc('\n');
+    
+    asm volatile(
+        ".option push\n"
+        ".option arch, +zifencei\n"
+        "fence.i\n"
+        ".option pop\n"
+        ::: "memory"
+    );
+    
+    // function pointer
+    void (*kernel_entry)(unsigned long, unsigned long) = (void (*)(unsigned long, unsigned long))KERNEL_LOAD_ADDR;
+    kernel_entry(hartid, dtb_ptr);     // jump to kernel
+}
 
 void start_bootLoader_shell(unsigned long hartid, unsigned long dtb_ptr){
     char buffer[MAX_CMD_LEN];
@@ -43,40 +92,10 @@ void start_bootLoader_shell(unsigned long hartid, unsigned long dtb_ptr){
         }
         // command "load"
         else if (strcmp(buffer, "load") == 0){
-            char* kernel_address = (char*)KERNEL_LOAD_ADDR;
-            unsigned int magic = 0;
-            unsigned int kernel_size = 0;
-
-            uart_puts("Please run the Python script for loading kernel...\n");
-
-            // check magic
-            for (int i = 0; i < 4; i++){
-                ((char*)&magic)[i] = uart_getc_raw();
-            }
-            if(magic != 0x544F4F42){
-                uart_puts("Error: magic number is not match.\n");
-                return;
-            }
-
-            // read kernel size
-            for (int i = 0; i < 4; i++){
-                ((char*)&kernel_size)[i] = uart_getc_raw();
-            }
-            uart_puts("Loading kernel, the Kernel Size: ");
-            uart_hex(kernel_size);
-            uart_puts("\n");
-
-            // Start to get kernel image
-            for (int i = 0; i < kernel_size; i++){
-                kernel_address[i] = uart_getc_raw();
-            }
-            uart_puts("Kernel loaded successfully! Jump to kernel");
-            uart_hex(KERNEL_LOAD_ADDR);
-            uart_putc('\n');
-
-            // function pointer
-            void (*kernel_entry)(unsigned long, unsigned long) = (void (*)(unsigned long, unsigned long))KERNEL_LOAD_ADDR;
-            kernel_entry(hartid, dtb_ptr);     // jump to kernel
+            uart_puts("Preparing to relocate Bootloader...\n");
+            unsigned long offset = RELOCATE_BASE - BEFORE_BASE;
+            void *continue_func = (void *)((unsigned long)load_kernel + offset);
+            relocate(hartid, dtb_ptr, continue_func); // relocate and return to load_kernel()
         }
         // unknown command
         else {
