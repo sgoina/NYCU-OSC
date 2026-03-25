@@ -12,15 +12,25 @@ SRC_DIR = src
 # -g: GNU Debugger
 # -Wall: Open all warning
 CFLAGS = -mcmodel=medany -ffreestanding -nostdlib -g -Wall -fno-pie -I$(INC_DIR)
-TARGET = kernel
+TARGET = boot_loader
 
-SRCS_S = start.S
-SRCS_C = boot_loader.c $(wildcard $(SRC_DIR)/*.c)
+SRCS_C_COMMON = $(wildcard $(SRC_DIR)/*.c)
+COMMON_OBJS = $(patsubst %.c, %.o, $(SRCS_C_COMMON))
+              
+boot_loader.elf: LINK_SCRIPT = bootLoader_link.ld
 
-OBJS = $(patsubst %.S, %.o, $(SRCS_S)) \
-       $(patsubst %.c, %.o, $(SRCS_C))
+kernel.elf: LINK_SCRIPT = kernel_link.ld
+       
+.PHONY: all clean boot_loader kernel
 
-all: $(TARGET).fit
+all: boot_loader kernel
+
+boot_loader: boot_loader.fit
+
+kernel: kernel.img
+
+boot_loader.elf: start_bootLoader.o $(COMMON_OBJS)
+kernel.elf: start_kernel.o $(COMMON_OBJS)
 
 %.o: %.S
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -28,14 +38,17 @@ all: $(TARGET).fit
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGET).elf: $(OBJS)
-	$(LD) -T link.ld -o $@ $(OBJS)
-
-$(TARGET).fit: $(TARGET).elf
-	$(OBJCOPY) -O binary $(TARGET).elf $(TARGET).bin
-	mkimage -f $(TARGET).its $@
+%.elf: %.o $(COMMON_OBJS)
+	$(LD) -T $(LINK_SCRIPT) -o $@ $^
+	
+%.img: %.elf
+	$(OBJCOPY) -O binary $< $@
+	
+%.fit: %.elf
+	$(OBJCOPY) -O binary $< $*.bin
+	mkimage -f kernel.its $@
 
 clean:
-	rm $(TARGET).elf $(TARGET).bin $(TARGET).fit $(OBJS)
-
-.PHONY: all clean
+	rm -f boot_loader.elf boot_loader.bin boot_loader.fit boot_loader.o start_bootLoader.o
+	rm -f kernel.elf kernel.o kernel.img start_kernel.o
+	rm -f $(COMMON_OBJS)

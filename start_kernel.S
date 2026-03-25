@@ -12,4 +12,4 @@ clear_bss_loop:
 
 clear_bss_done: 
     la sp, _end
-    tail new_kernel
+    tail start_new_kernel
