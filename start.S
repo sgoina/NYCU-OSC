@@ -3,7 +3,6 @@
 .global relocate
 
 .equ RELOC_DEST, 0x20000000
-.equ LOAD_BASE,  0x00200000
 
 _start:
     la t0, __bss_start
@@ -22,7 +21,7 @@ relocate:
     // save parameters
     mv s0, a0              // s0 = hartid
     mv s1, a1              // s1 = dtb_ptr
-    mv s2, a2              // s2 = continue_func(high)
+    mv s2, a2              // s2 = continue_func (high address)
 
     la t0, _load_start     // Old boot loader base
     la t1, _load_end       // Old boot loader end
@@ -38,9 +37,16 @@ copy_loop:
 
 copy_done:
     .insn i 0x0F, 0x1, x0, x0, 0x000
+    // .insn: Assembler
+    // i    : I-type (Immediate)
+    // 0x0F : Opcode (MISC-MEM)
+    // 0x1  : Funct3 (fence.i)
+    // x0   : rd (register destination)
+    // x0   : rs1 (register source 1)
+    // 0x000: Immediate number (12 bits)
     
     li   t0, RELOC_DEST
-    li   t1, LOAD_BASE
+    la   t1, _load_start
     sub  t2, t0, t1          // Calculate the offset of relocation
     add  sp, sp, t2          // New stack pointer address
 

@@ -13,8 +13,8 @@ SECTIONS
         *(.sbss) *(.bss)
         __bss_stop = .;
     }
-    _load_end = .;
     . = ALIGN(16);
     . = . + 0x4000;
+    _load_end = .;
     _end = .;
 }

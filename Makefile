@@ -6,11 +6,12 @@ OBJCOPY = $(RISCV_GNU)-objcopy
 INC_DIR = include
 SRC_DIR = src
 
-# -mcmodel=medany: can load anywhere in memory
+# -mcmodel=medany: access a global symbol by PC-relative
 # -ffreestanding: Independent running (No int main(void))
 # -nostdlib: No common Libraries
 # -g: GNU Debugger
 # -Wall: Open all warning
+# -fno-pie: (Link) access global symbol use absolute address instead of global offset table (GOT)
 CFLAGS = -mcmodel=medany -ffreestanding -nostdlib -g -Wall -fno-pie -I$(INC_DIR)
 TARGET = boot_loader
 

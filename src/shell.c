@@ -10,14 +10,15 @@
 #define RELOCATE_BASE 0x20000000UL
 #define BEFORE_BASE 0x00200000UL
 
-extern void relocate(unsigned long hartid, unsigned long dtb_ptr, void* continue_func);
+extern void relocate(unsigned long hartid, unsigned long dtb_ptr, void* continue_func); // relocate function in start.S
 
 void load_kernel(unsigned long hartid, unsigned long dtb_ptr) {
+    uart_puts("Relocation finished.\n");
+    
     char* kernel_address = (char*)KERNEL_LOAD_ADDR;
     unsigned int magic = 0;
     unsigned int kernel_size = 0;
-
-    uart_puts("Please run the Python script for loading kernel...\n");
+    uart_puts("Please run the Python code for loading kernel...\n");
 
     // check magic
     for (int i = 0; i < 4; i++){
@@ -45,11 +46,11 @@ void load_kernel(unsigned long hartid, unsigned long dtb_ptr) {
     uart_putc('\n');
     
     asm volatile(
-        ".option push\n"
-        ".option arch, +zifencei\n"
-        "fence.i\n"
-        ".option pop\n"
-        ::: "memory"
+        ".option push\n"             // save current setting of environment
+        ".option arch, +zifencei\n"  // add extra instruction set "zifencei"
+        "fence.i\n"                  // use "fence.i" to Flush D-Cache, Invalidate I-Cache, Pipeline Synchronization
+        ".option pop\n"              // load origin setting of environment
+        ::: "memory"                 // flush the data in cache to memory
     );
     
     // function pointer
@@ -92,9 +93,9 @@ void start_bootLoader_shell(unsigned long hartid, unsigned long dtb_ptr){
         }
         // command "load"
         else if (strcmp(buffer, "load") == 0){
-            uart_puts("Preparing to relocate Bootloader...\n");
-            unsigned long offset = RELOCATE_BASE - BEFORE_BASE;
-            void *continue_func = (void *)((unsigned long)load_kernel + offset);
+            uart_puts("Preparing to relocate Boot Loader...\n");
+            unsigned long moving_offset = RELOCATE_BASE - BEFORE_BASE;
+            void *continue_func = (void *)((unsigned long)load_kernel + moving_offset);
             relocate(hartid, dtb_ptr, continue_func); // relocate and return to load_kernel()
         }
         // unknown command

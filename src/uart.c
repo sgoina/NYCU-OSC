@@ -2,7 +2,7 @@
 #include "defint.h"
 #include "deviceTree.h"
 
-unsigned long uart_base_addr = 0;
+static unsigned long uart_base_addr = 0;
 
 #define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Receive Buffer Register
 #define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Transmit Holding Register
@@ -12,11 +12,11 @@ unsigned long uart_base_addr = 0;
 
 // setup uart_base_addr
 int uart_init(unsigned long dtb_ptr) {
-    int uart_base_offset = fdt_path_offset(dtb_ptr, "/soc/serial");
+    int uart_base_offset = fdt_path_offset(dtb_ptr, "/soc/serial"); // find the offset of "/soc/serial" in the device tree
     if (uart_base_offset == -1)
         return -1;
     int len = 0;
-    const void* prop = fdt_getprop(dtb_ptr, uart_base_offset, "reg", &len);
+    const void* prop = fdt_getprop(dtb_ptr, uart_base_offset, "reg", &len); // find the base address of uart
     if (prop != NULL){
         const uint32_t* reg = (const uint32_t*)prop;    
         uint32_t uart_reg = bswap32(reg[1]);

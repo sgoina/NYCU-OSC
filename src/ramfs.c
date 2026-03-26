@@ -4,7 +4,7 @@
 #include "uart.h"
 #include "string.h"
 
-void *cpio_address = 0;
+static void *cpio_address = 0;
 
 struct cpio_t {
     char magic[6];
@@ -54,10 +54,10 @@ static int align(int n, int byte) {
 }
 
 int initrd_addr(unsigned long dtb_ptr){
-    int rd_base_offset = fdt_path_offset(dtb_ptr, "/chosen");
+    int rd_base_offset = fdt_path_offset(dtb_ptr, "/chosen"); // find the base address of "chosen" in device tree.
     if (rd_base_offset != -1){
         int len = 0;
-        uint32_t* rd_start = (uint32_t*)fdt_getprop(dtb_ptr, rd_base_offset, "linux,initrd-start", &len);
+        uint32_t* rd_start = (uint32_t*)fdt_getprop(dtb_ptr, rd_base_offset, "linux,initrd-start", &len); // use offset to find starting address of cpio
         if(rd_start){
             if (len == 4) {
                 cpio_address = (void*)(unsigned long)bswap32(*rd_start);
@@ -75,8 +75,10 @@ int initrd_addr(unsigned long dtb_ptr){
 
 void ls_filenames(){
     char *ptr = (char *)cpio_address;
-    int file_cnt = 0;
+    int file_cnt = 0; // the counting number of files
+    // count the total of files
     while (1){
+        // check header->magic
         struct cpio_t *header = (struct cpio_t *) ptr;
         if (strncmp(header->magic, "070701", 6) != 0){
             uart_puts("Error: magic number is not match.\n");
@@ -84,18 +86,19 @@ void ls_filenames(){
         }
         int name_sz = hextoi(header->namesize, 8);
         int file_sz = hextoi(header->filesize, 8);
-        const char *filename = ptr+ sizeof(struct cpio_t);
+        const char *filename = ptr+ sizeof(struct cpio_t); // skip header and get the file name
         if (strcmp(filename, "TRAILER!!!") == 0)
             break;
         file_cnt++;
-        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // jump header + name + padding 1
-        int next_header_offset = align(content_offset + file_sz, 4); // jump header + name + padding 2
+        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // skip header + name + padding 1
+        int next_header_offset = align(content_offset + file_sz, 4); // skip content + padding 2
         ptr += next_header_offset;
     }
     uart_puts("Total ");
     uart_dec(file_cnt);
     uart_puts(" files.\n");
     ptr = (char *)cpio_address;
+    // show all files
     while (1){
         struct cpio_t *header = (struct cpio_t *) ptr;
         if (strncmp(header->magic, "070701", 6) != 0){
@@ -111,17 +114,18 @@ void ls_filenames(){
         uart_putc(' ');
         uart_puts(filename);
         uart_putc('\n');
-        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // jump header + name + padding 1
-        int next_header_offset = align(content_offset + file_sz, 4); // jump header + name + padding 2
+        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // skip header + name + padding 1
+        int next_header_offset = align(content_offset + file_sz, 4); // skip content + padding 2
         ptr += next_header_offset;
     }
 }
 
 void cat_file_content(const char* filename) {
-    // TODO: Implement this function
     char *ptr = (char *)cpio_address;
+    // find the file and show its content
     while (1){
         struct cpio_t *header = (struct cpio_t *) ptr;
+        // check header->magic
         if (strncmp(header->magic, "070701", 6) != 0){
             uart_puts("Error: magic number is not match.\n");
             return;
@@ -129,19 +133,21 @@ void cat_file_content(const char* filename) {
         int name_sz = hextoi(header->namesize, 8);
         int file_sz = hextoi(header->filesize, 8);
         const char *find_name = ptr + sizeof(struct cpio_t);
+        // Can't find the file
         if (strcmp(find_name, "TRAILER!!!") == 0){
             uart_puts(filename);
             uart_puts(": No such file\n");
             break;
         }
+        // find the file and show the content
         else if (strcmp(find_name, filename) == 0){
             const char *content = ptr + align(sizeof(struct cpio_t) + name_sz, 4);
             uart_puts(content);
             uart_putc('\n');
             return;
         }
-        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // jump header + name + padding 1
-        int next_header_offset = align(content_offset + file_sz, 4); // jump header + name + padding 2
+        int content_offset = align(sizeof(struct cpio_t) + name_sz, 4); // skip header + name + padding 1
+        int next_header_offset = align(content_offset + file_sz, 4); // skip content + padding 2
         ptr += next_header_offset;
     }
     return;
