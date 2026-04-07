@@ -3,6 +3,7 @@
 #include "uart.h"
 #include "string.h"
 #include "ramfs.h"
+#include "mem_alloc.h"
 
 // Command length limit
 #define MAX_CMD_LEN 128
@@ -143,6 +144,7 @@ void start_kernel_shell(){
             uart_puts("  info  - print system info.\n");
             uart_puts("  ls    - show all filenames.\n");
             uart_puts("  cat \"filename\"  - show the file content.\n");
+            uart_puts("  allocate - test allocation.\n");
         }
         // command "hello"
         else if (strcmp(buffer, "hello") == 0)
@@ -167,6 +169,9 @@ void start_kernel_shell(){
         // command "cat"
         else if (strncmp(buffer, "cat ", 4) == 0){
             cat_file_content(&buffer[4]);
+        }
+        else if (strcmp(buffer, "allocate") == 0){
+            alloc_test();
         }
         // unknown command
         else {
