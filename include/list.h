@@ -50,3 +50,14 @@ static inline int list_empty(const struct list_head *head) {
 static inline struct page *list_front(struct list_head *head) {
     return (struct page *) head->next;
 }
+
+// get the size of the list
+static inline int list_size(const struct list_head *head) {
+    int count = 0;
+    struct list_head *curr = head->next;
+    while (curr != head) {
+        count++;
+        curr = curr->next;
+    } 
+    return count;
+}

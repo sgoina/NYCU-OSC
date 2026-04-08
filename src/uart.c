@@ -1,5 +1,4 @@
 #include "uart.h"
-#include "defint.h"
 #include "deviceTree.h"
 
 static unsigned long uart_base_addr = 0;

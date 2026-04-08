@@ -1,8 +1,6 @@
 #include "ramfs.h"
-#include "defint.h"
 #include "deviceTree.h"
 #include "uart.h"
-#include "string.h"
 
 static void *cpio_address = 0;
 
