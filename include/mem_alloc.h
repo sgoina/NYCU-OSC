@@ -1,3 +1,5 @@
+void add_early_reserve(unsigned long long start, unsigned long long size);
+
 void init_mem(unsigned long dtb_ptr);
 
 void *allocate(unsigned int size);

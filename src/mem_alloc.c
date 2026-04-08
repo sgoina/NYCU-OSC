@@ -3,12 +3,14 @@
 #include "uart.h"
 #include "list.h"
 
+extern char _start[];
+extern char _end[];
+
 static uint64_t mem_start = 0;
 static uint64_t mem_end = 0;
 static int actual_num_pages = 0; // NEW: 記錄系統實際有幾個可用的 Pages
 
 #define PAGE_SIZE 4096 // 1 page size = 4KB
-#define MAX_MEM_PAGES 524288 // NEW: 預留給最多 2GB 記憶體的陣列大小 (524288 * 4KB = 2GB)
 
 #define MAX_ORDER 10 // 2^10 = 1024 pages (4MB)
 #define NUM_POOLS 6 // the number of options in Dynamic Memory Allocator
@@ -24,13 +26,77 @@ struct page {
 };
 
 // Frame Array (使用編譯期固定的常數，這樣編譯器就不會報錯了！)
-struct page mem_map[MAX_MEM_PAGES];
+struct page *mem_map;
 
 // free list for every order
 struct list_head free_area[MAX_ORDER + 1];
 
 // chuck pool for every size
 struct list_head chunk_pools[NUM_POOLS];
+
+// 🌟 1. 定義用來暫存保留區段的結構
+struct reserved_region {
+    uint64_t start;
+    uint64_t end;
+};
+
+#define MAX_RESERVED_REGIONS 32
+static struct reserved_region early_reserved[MAX_RESERVED_REGIONS];
+static int num_early_reserved = 0;
+
+// 🌟 2. 將保留區加入暫存陣列的函式
+void add_early_reserve(uint64_t start, uint64_t size) {
+    if (size == 0 || num_early_reserved >= MAX_RESERVED_REGIONS) return;
+    early_reserved[num_early_reserved].start = start;
+    early_reserved[num_early_reserved].end = start + size;
+    num_early_reserved++;
+}
+
+// 🌟 3. 排序並尋找完美空隙的函式
+static uint64_t find_safe_base(uint64_t mem_map_size) {
+    // 氣泡排序 (Bubble Sort)：依據 start address 將保留區由小到大排序
+    for (int i = 0; i < num_early_reserved - 1; i++) {
+        for (int j = 0; j < num_early_reserved - i - 1; j++) {
+            if (early_reserved[j].start > early_reserved[j+1].start) {
+                struct reserved_region temp = early_reserved[j];
+                early_reserved[j] = early_reserved[j+1];
+                early_reserved[j+1] = temp;
+            }
+        }
+    }
+
+    uint64_t current_base = mem_start;
+
+    // 從記憶體最前端開始掃描每一個保留區
+    for (int i = 0; i < num_early_reserved; i++) {
+        // 確保我們評估的起點是 4KB 對齊的
+        uint64_t aligned_base = (current_base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+        
+        // 如果當前的空地起點 < 這個保留區的起點，代表我們找到了一個空隙！
+        if (early_reserved[i].start > aligned_base) {
+            uint64_t gap_size = early_reserved[i].start - aligned_base;
+            
+            // 檢查這個空隙夠不夠塞下 mem_map
+            if (gap_size >= mem_map_size) {
+                return aligned_base; // 找到了完美的空地！
+            }
+        }
+        
+        // 推進 current_base 到這個保留區的尾端，繼續往下找
+        if (early_reserved[i].end > current_base) {
+            current_base = early_reserved[i].end;
+        }
+    }
+
+    // 如果所有的保留區中間都沒有夠大的空隙，檢查最後一個保留區到實體記憶體盡頭的空間
+    uint64_t aligned_base = (current_base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+    if (mem_end > aligned_base && (mem_end - aligned_base) >= mem_map_size) {
+        return aligned_base;
+    }
+
+    uart_puts("Error: Cannot find safe gap for mem_map!\n");
+    return 0; 
+}
 
 void init_mem(unsigned long dtb_ptr){
     int mem_offset = fdt_path_offset(dtb_ptr, "/memory"); // find the offset of "/memory" in the device tree
@@ -47,11 +113,6 @@ void init_mem(unsigned long dtb_ptr){
 
             // 🌟 執行期計算實際的 page 數量
             actual_num_pages = mem_size / PAGE_SIZE;
-            
-            // 防呆：如果讀到的記憶體大於 2GB，截斷到我們陣列的極限
-            if (actual_num_pages > MAX_MEM_PAGES) {
-                actual_num_pages = MAX_MEM_PAGES;
-            }
 
             uart_puts("Memory address: ");
             uart_hex(mem_start);
@@ -60,6 +121,52 @@ void init_mem(unsigned long dtb_ptr){
             uart_putc('\n');
         }
     }
+    num_early_reserved = 0; // 重置計數器
+
+    // 1. Kernel
+    add_early_reserve((uint64_t)_start, (uint64_t)_end - (uint64_t)_start);
+    // 2. DTB
+    add_early_reserve((uint64_t)dtb_ptr, bswap32(((const struct fdt_header *)dtb_ptr)->totalsize));
+    // 3. 保留 Initramfs
+    int ramfs_offset = fdt_path_offset(dtb_ptr, "/chosen");
+    if (ramfs_offset != -1) {
+        int len1 = 0, len2 = 0;
+        const void* start_prop = fdt_getprop(dtb_ptr, ramfs_offset, "linux,initrd-start", &len1);
+        const void* end_prop = fdt_getprop(dtb_ptr, ramfs_offset, "linux,initrd-end", &len2);
+        
+        if (start_prop != NULL && end_prop != NULL) {
+            uint64_t initrd_start = 0, initrd_end = 0;
+
+            if (len1 == 8 && len2 == 8) {
+                initrd_start = bswap64(*(const uint64_t*)start_prop);
+                initrd_end   = bswap64(*(const uint64_t*)end_prop);
+            } else if (len1 == 4 && len2 == 4) {
+                initrd_start = bswap32(*(const uint32_t*)start_prop);
+                initrd_end   = bswap32(*(const uint32_t*)end_prop);
+            }
+
+            if (initrd_start < initrd_end) {
+                // 🌟 改用 add_early_reserve
+                add_early_reserve(initrd_start, initrd_end - initrd_start);
+            }
+        }
+    }
+    
+    // 4. 保留 Device Tree /reserved-memory
+    // 呼叫你之前寫的走訪函式，但記得要把 fdt_reserve_memory_nodes 裡面的 
+    // memory_reserve 改成 add_early_reserve！
+    fdt_reserve_memory_nodes(dtb_ptr);
+    
+    uint64_t mem_map_size = actual_num_pages * sizeof(struct page);
+    uint64_t safe_base = find_safe_base(mem_map_size);
+    
+    mem_map = (struct page *)safe_base;
+
+    uart_puts("[Startup Allocator] mem_map placed safely at: ");
+    uart_hex(safe_base);
+    uart_puts(", size: ");
+    uart_hex(mem_map_size);
+    uart_putc('\n');
     
     // initialize buddy system
     for (int i = 0; i <= MAX_ORDER; i++) {
@@ -76,6 +183,7 @@ void init_mem(unsigned long dtb_ptr){
         mem_map[i].val = 1;
         mem_map[i].order = -1;
         mem_map[i].pool_idx = -1;
+        mem_map[i].chunk_count = 0;
         INIT_LIST_HEAD(&mem_map[i].list);
     }
 
@@ -87,6 +195,16 @@ void init_mem(unsigned long dtb_ptr){
             list_add_back(&mem_map[i].list, &free_area[MAX_ORDER]);
         }
     }
+    
+    uart_puts("--- Start Reserving Memory ---\n");
+
+    // 1. 跑迴圈把 Phase 1 記下來的清單全部交給 memory_reserve
+    for (int i = 0; i < num_early_reserved; i++) {
+        uart_puts("Reserve recorded region: ");
+        memory_reserve(early_reserved[i].start, early_reserved[i].end - early_reserved[i].start);
+    }
+    memory_reserve(safe_base, mem_map_size);
+    show_mem_alloc();
 }
 
 unsigned long page_to_addr(int idx){
@@ -538,4 +656,3 @@ void alloc_test(){
         free(kmem_ptr7);
     }
 }
-

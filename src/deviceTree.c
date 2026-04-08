@@ -211,8 +211,15 @@ void fdt_reserve_memory_nodes(unsigned long dtb_ptr) {
                     uart_dec(cnt);
                     uart_puts(". ");
                     uart_puts(node_name);
-                    uart_puts(" Reserve region, ");
-                    memory_reserve(base, size);
+                    // 🌟 修改這裡：只印出 Record，不呼叫 memory_reserve
+                    uart_puts(" Recorded for early reserve, begin: ");
+                    uart_hex(base);
+                    uart_puts(", size: ");
+                    uart_hex(size);
+                    uart_putc('\n');
+
+                    // 🌟 將解析到的區塊塞進 early_reserved 陣列中！
+                    add_early_reserve(base, size);
                 }
             }
             p += ALIGN_UP_4(len); // 跳過該屬性的資料，繼續往下找
