@@ -192,6 +192,16 @@ void init_mem(unsigned long dtb_ptr){
         if (i + (1 << MAX_ORDER) <= num_pages) {
             mem_map[i].order = MAX_ORDER;
             list_add_back(&mem_map[i].list, &free_area[MAX_ORDER]);
+            
+            uart_puts("[+] Add page ");
+            uart_dec(i);
+            uart_puts(" to order ");
+            uart_dec(MAX_ORDER);
+            uart_puts(". Range of pages: [");
+            uart_dec(i);
+            uart_puts(", ");
+            uart_dec(end_idx(i, MAX_ORDER));
+            uart_puts("]\n");
         }
     }
     
@@ -282,7 +292,7 @@ void fdt_reserve_memory_nodes(unsigned long dtb_ptr) {
 
 // convert page index to address
 unsigned long page_to_addr(int idx){
-    return mem_start + idx * PAGE_SIZE;
+    return mem_start + (uint64_t)idx * PAGE_SIZE;
 }
 
 // get the end page index in the same block
@@ -658,6 +668,15 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
 
             // if overlap, remove from free list of this order
             list_remove(curr);
+            uart_puts("[-] Remove page ");
+            uart_dec(pfn);
+            uart_puts(" from order ");
+            uart_dec(order);
+            uart_puts(". Range of pages: [");
+            uart_dec(pfn);
+            uart_puts(", ");
+            uart_dec(end_idx(pfn, order));
+            uart_puts("]\n");
 
             // full overlap
             if (block_start >= start_pfn && block_end <= end_pfn) {
@@ -684,7 +703,8 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
 
             // Partial overlap, order -= 1
             int next_order = order - 1;
-            struct page *buddy = &mem_map[pfn ^ (1 << next_order)];
+            int buddy_idx = pfn ^ (1 << next_order);
+            struct page *buddy = &mem_map[buddy_idx];
 
             p->order = next_order;
             buddy->order = next_order;
@@ -692,6 +712,25 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             // This order is too big, so halve the size and put them into free list of next order
             list_add_back(&p->list, &free_area[next_order]);
             list_add_back(&buddy->list, &free_area[next_order]);
+            
+            uart_puts("[+] Add page ");
+            uart_dec(pfn);
+            uart_puts(" to order ");
+            uart_dec(next_order);
+            uart_puts(". Range of pages: [");
+            uart_dec(pfn);
+            uart_puts(", ");
+            uart_dec(end_idx(pfn, next_order));
+            uart_puts("]\n");
+            uart_puts("[+] Add page ");
+            uart_dec(buddy_idx);
+            uart_puts(" to order ");
+            uart_dec(next_order);
+            uart_puts(". Range of pages: [");
+            uart_dec(buddy_idx);
+            uart_puts(", ");
+            uart_dec(end_idx(buddy_idx, next_order));
+            uart_puts("]\n");
 
             curr = next_node;
         }
@@ -704,11 +743,13 @@ void alloc_test(){
     char *ptr2 = (char *)allocate(8000);
     char *ptr3 = (char *)allocate(4000);
     char *ptr4 = (char *)allocate(4000);
+    char *ptr5 = (char *)allocate(4000);
 
     free(ptr1);
     free(ptr2);
     free(ptr3);
     free(ptr4);
+    free(ptr5);
 
     /* Test kmalloc */
     uart_puts("Testing dynamic allocator...\n");
