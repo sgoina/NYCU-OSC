@@ -2,12 +2,6 @@
 #include "uart.h"
 #include "mem_alloc.h"
 
-#define FDT_BEGIN_NODE 0x00000001
-#define FDT_END_NODE   0x00000002
-#define FDT_PROP       0x00000003
-#define FDT_NOP        0x00000004
-#define FDT_END        0x00000009
-
 #define MAX_DEPTH 16
 
 static inline const void* align_up(const void* ptr, size_t align) {
@@ -144,89 +138,4 @@ const void* fdt_getprop(unsigned long dtb_ptr, int nodeoffset, const char* name,
         }
     }
     return NULL; // Can't find the property
-}
-
-// 輔助巨集：將位址向上對齊到 4 的倍數 (FDT 的規範)
-#define ALIGN_UP_4(x) (((x) + 3) & ~3)
-
-void fdt_reserve_memory_nodes(unsigned long dtb_ptr) {
-    int reserved_offset = fdt_path_offset(dtb_ptr, "/reserved-memory");
-    if (reserved_offset == -1) return; // 如果 DTB 裡沒有這個節點，就直接跳過
-
-    uart_puts("--- Parsing /reserved-memory ---\n");
-
-    const void* fdt = (const void*)dtb_ptr;
-    const struct fdt_header* hdr = (const struct fdt_header*)fdt;
-    const uint8_t* p = (const uint8_t*)fdt + reserved_offset;
-
-    // 確認這個 offset 真的是 FDT_BEGIN_NODE (0x00000001)
-    uint32_t token = bswap32(*(const uint32_t*)p);
-    if (token != 0x00000001) return; 
-    p += 4;
-
-    // 跳過 "/reserved-memory" 的節點名稱
-    int name_len = strlen((const char*)p);
-    p += ALIGN_UP_4(name_len + 1);
-
-    int depth = 1; // 深度 1 代表我們在 /reserved-memory 內部
-
-    char* node_name;
-    int cnt = 0;
-    while (1) {
-        token = bswap32(*(const uint32_t*)p);
-        p += 4;
-
-        if (token == 0x00000001) { 
-            // 遇到 FDT_BEGIN_NODE：代表我們進入了它的子節點 (例如 mmode_resv)
-            depth++;
-            int nlen = strlen((const char*)p);
-            if (depth == 2)
-                node_name = (char *)p;
-            p += ALIGN_UP_4(nlen + 1);
-        }
-        else if (token == 0x00000002) { 
-            // 遇到 FDT_END_NODE：代表離開了一個節點
-            depth--;
-            if (depth == 0) break; // 深度歸零，代表我們完全離開了 /reserved-memory，結束搜尋
-        }
-        else if (token == 0x00000003) { 
-            // 遇到 FDT_PROP：屬性資料
-            uint32_t len = bswap32(*(const uint32_t*)p);
-            uint32_t nameoff = bswap32(*(const uint32_t*)(p + 4));
-            p += 8;
-
-            // 我們只在乎深度為 2 的節點（也就是 /reserved-memory 的直系子節點）裡的屬性
-            if (depth == 2) {
-                const char* strings = (const char*)fdt + bswap32(hdr->off_dt_strings);
-                const char* prop_name = strings + nameoff;
-
-                // 如果屬性名稱是 "reg"，且長度足夠 64-bit (16 bytes)
-                if (strcmp(prop_name, "reg") == 0 && len >= 16) {
-                    const uint32_t* reg = (const uint32_t*)p;
-                    // 轉序號並組合出 64-bit 的 base 和 size
-                    uint64_t base = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
-                    uint64_t size = ((uint64_t)bswap32(reg[2]) << 32) | bswap32(reg[3]);
-                    
-                    cnt++;
-                    uart_dec(cnt);
-                    uart_puts(". ");
-                    uart_puts(node_name);
-                    // 🌟 修改這裡：只印出 Record，不呼叫 memory_reserve
-                    uart_puts(" Recorded for early reserve, begin: ");
-                    uart_hex(base);
-                    uart_puts(", size: ");
-                    uart_hex(size);
-                    uart_putc('\n');
-
-                    // 🌟 將解析到的區塊塞進 early_reserved 陣列中！
-                    add_early_reserve(base, size);
-                }
-            }
-            p += ALIGN_UP_4(len); // 跳過該屬性的資料，繼續往下找
-        }
-        else if (token == 0x00000009) { 
-            // FDT_END
-            break;
-        }
-    }
 }

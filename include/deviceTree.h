@@ -1,6 +1,12 @@
 #include "defint.h"
 #include "string.h"
 
+#define FDT_BEGIN_NODE 0x00000001
+#define FDT_END_NODE   0x00000002
+#define FDT_PROP       0x00000003
+#define FDT_NOP        0x00000004
+#define FDT_END        0x00000009
+
 struct fdt_header {
     uint32_t magic;
     uint32_t totalsize;
@@ -17,5 +23,3 @@ struct fdt_header {
 int fdt_path_offset(unsigned long dtb_ptr, const char* path);
 
 const void* fdt_getprop(unsigned long dtb_ptr, int nodeoffset, const char* name, int* lenp);
-
-void fdt_reserve_memory_nodes(unsigned long dtb_ptr);

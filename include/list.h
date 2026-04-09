@@ -47,8 +47,8 @@ static inline int list_empty(const struct list_head *head) {
 }
 
 // get the first element in the list
-static inline struct page *list_front(struct list_head *head) {
-    return (struct page *) head->next;
+static inline struct list_head *list_front(struct list_head *head) {
+    return head->next;
 }
 
 // get the size of the list

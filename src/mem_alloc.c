@@ -3,15 +3,24 @@
 #include "uart.h"
 #include "list.h"
 
-extern char _start[];
-extern char _end[];
+extern char _start[]; // kernel start
+extern char _end[]; // kernel end
 
-static uint64_t mem_start = 0;
-static uint64_t mem_end = 0;
-static int actual_num_pages = 0; // NEW: 記錄系統實際有幾個可用的 Pages
+static uint64_t mem_start = 0; // the start of memory region
+static uint64_t mem_end = 0; // the end of memory region
+static int num_pages = 0; // the number of usable pages
+
+// reserved region
+struct reserved_region {
+    uint64_t start;
+    uint64_t end;
+};
+
+#define MAX_RESERVED_REGIONS 32 
+static struct reserved_region early_reserved[MAX_RESERVED_REGIONS]; //record all reserved regions
+static int num_early_reserved = 0; // the number of reserved regions
 
 #define PAGE_SIZE 4096 // 1 page size = 4KB
-
 #define MAX_ORDER 10 // 2^10 = 1024 pages (4MB)
 #define NUM_POOLS 6 // the number of options in Dynamic Memory Allocator
 const int pool_sizes[NUM_POOLS] = {16, 32, 64, 128, 256, 512};
@@ -19,13 +28,13 @@ const int pool_sizes[NUM_POOLS] = {16, 32, 64, 128, 256, 512};
 // Frame Array node
 struct page {
     struct list_head list;
-    int order; // -1 is not a head
+    int order; // -1 is not a head, others in 0~10
     int val; // 1 is allocable, 0 is used
-    int pool_idx; // NEW: -1 代表屬於 Buddy System，>= 0 代表屬於 Chunk Pool
-    int chunk_count; // NEW: 記錄這個 Page 有幾個 chunk 正在被外借
+    int pool_idx; // -1 for buddy system, 0~5 for different chunk size
+    int chunk_count; // Record how many chunk is used in this page
 };
 
-// Frame Array (使用編譯期固定的常數，這樣編譯器就不會報錯了！)
+// Frame Array
 struct page *mem_map;
 
 // free list for every order
@@ -34,17 +43,7 @@ struct list_head free_area[MAX_ORDER + 1];
 // chuck pool for every size
 struct list_head chunk_pools[NUM_POOLS];
 
-// 🌟 1. 定義用來暫存保留區段的結構
-struct reserved_region {
-    uint64_t start;
-    uint64_t end;
-};
-
-#define MAX_RESERVED_REGIONS 32
-static struct reserved_region early_reserved[MAX_RESERVED_REGIONS];
-static int num_early_reserved = 0;
-
-// 🌟 2. 將保留區加入暫存陣列的函式
+// add a reserved region in array 
 void add_early_reserve(uint64_t start, uint64_t size) {
     if (size == 0 || num_early_reserved >= MAX_RESERVED_REGIONS) return;
     early_reserved[num_early_reserved].start = start;
@@ -52,9 +51,9 @@ void add_early_reserve(uint64_t start, uint64_t size) {
     num_early_reserved++;
 }
 
-// 🌟 3. 排序並尋找完美空隙的函式
+// find the safe address for mem_map (Frame Array)
 static uint64_t find_safe_base(uint64_t mem_map_size) {
-    // 氣泡排序 (Bubble Sort)：依據 start address 將保留區由小到大排序
+    // bubble sort in reserved region array
     for (int i = 0; i < num_early_reserved - 1; i++) {
         for (int j = 0; j < num_early_reserved - i - 1; j++) {
             if (early_reserved[j].start > early_reserved[j+1].start) {
@@ -66,38 +65,34 @@ static uint64_t find_safe_base(uint64_t mem_map_size) {
     }
 
     uint64_t current_base = mem_start;
-
-    // 從記憶體最前端開始掃描每一個保留區
     for (int i = 0; i < num_early_reserved; i++) {
-        // 確保我們評估的起點是 4KB 對齊的
+        // align the address in 1 page
         uint64_t aligned_base = (current_base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
         
-        // 如果當前的空地起點 < 這個保留區的起點，代表我們找到了一個空隙！
         if (early_reserved[i].start > aligned_base) {
             uint64_t gap_size = early_reserved[i].start - aligned_base;
-            
-            // 檢查這個空隙夠不夠塞下 mem_map
+            // this gap is enough for mem_map
             if (gap_size >= mem_map_size) {
-                return aligned_base; // 找到了完美的空地！
+                return aligned_base;
             }
         }
-        
-        // 推進 current_base 到這個保留區的尾端，繼續往下找
+        // update current_base
         if (early_reserved[i].end > current_base) {
             current_base = early_reserved[i].end;
         }
     }
 
-    // 如果所有的保留區中間都沒有夠大的空隙，檢查最後一個保留區到實體記憶體盡頭的空間
+    // determine whether the last region is enough for mem_map
     uint64_t aligned_base = (current_base + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
     if (mem_end > aligned_base && (mem_end - aligned_base) >= mem_map_size) {
         return aligned_base;
     }
-
+    // can't find a safe region for mem_map
     uart_puts("Error: Cannot find safe gap for mem_map!\n");
     return 0; 
 }
 
+// initalize memory allocation
 void init_mem(unsigned long dtb_ptr){
     int mem_offset = fdt_path_offset(dtb_ptr, "/memory"); // find the offset of "/memory" in the device tree
     if (mem_offset != -1){
@@ -106,69 +101,73 @@ void init_mem(unsigned long dtb_ptr){
         if (prop != NULL){
             const uint32_t* reg = (const uint32_t*)prop;
             mem_start = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
-            
-            // 🌟 修正：reg[2], reg[3] 代表的是 size！
             uint64_t mem_size = ((uint64_t)bswap32(reg[2]) << 32) | bswap32(reg[3]);
-            mem_end = mem_start + mem_size; 
+            mem_end = mem_start + mem_size;
 
-            // 🌟 執行期計算實際的 page 數量
-            actual_num_pages = mem_size / PAGE_SIZE;
+            num_pages = mem_size / PAGE_SIZE;
 
             uart_puts("Memory address: ");
             uart_hex(mem_start);
             uart_puts(", size: ");
-            uart_hex(mem_size); // 這裡印出 size 比較直觀
+            uart_hex(mem_size);
             uart_putc('\n');
         }
     }
-    num_early_reserved = 0; // 重置計數器
-
     // 1. Kernel
     add_early_reserve((uint64_t)_start, (uint64_t)_end - (uint64_t)_start);
+    uart_puts("Kernel address: ");
+    uart_hex((uint64_t)_start);
+    uart_puts(", size: ");
+    uart_hex((uint64_t)_end - (uint64_t)_start);
+    uart_putc('\n');
     // 2. DTB
     add_early_reserve((uint64_t)dtb_ptr, bswap32(((const struct fdt_header *)dtb_ptr)->totalsize));
-    // 3. 保留 Initramfs
+    uart_puts("DTB address: ");
+    uart_hex((uint64_t)dtb_ptr);
+    uart_puts(", size: ");
+    uart_hex(bswap32(((const struct fdt_header *)dtb_ptr)->totalsize));
+    uart_putc('\n');
+    // 3. Initramfs
     int ramfs_offset = fdt_path_offset(dtb_ptr, "/chosen");
     if (ramfs_offset != -1) {
         int len1 = 0, len2 = 0;
         const void* start_prop = fdt_getprop(dtb_ptr, ramfs_offset, "linux,initrd-start", &len1);
         const void* end_prop = fdt_getprop(dtb_ptr, ramfs_offset, "linux,initrd-end", &len2);
-        
         if (start_prop != NULL && end_prop != NULL) {
             uint64_t initrd_start = 0, initrd_end = 0;
-
-            if (len1 == 8 && len2 == 8) {
+            if (len1 == 8)
                 initrd_start = bswap64(*(const uint64_t*)start_prop);
-                initrd_end   = bswap64(*(const uint64_t*)end_prop);
-            } else if (len1 == 4 && len2 == 4) {
+            else
                 initrd_start = bswap32(*(const uint32_t*)start_prop);
+            if (len2 == 8)
+                initrd_end   = bswap64(*(const uint64_t*)end_prop);
+            else 
                 initrd_end   = bswap32(*(const uint32_t*)end_prop);
-            }
-
-            if (initrd_start < initrd_end) {
-                // 🌟 改用 add_early_reserve
-                add_early_reserve(initrd_start, initrd_end - initrd_start);
-            }
+            add_early_reserve(initrd_start, initrd_end - initrd_start);
+            uart_puts("Initramfs address: ");
+            uart_hex(initrd_start);
+            uart_puts(", size: ");
+            uart_hex(initrd_end);
+            uart_putc('\n');
         }
+        else
+            uart_puts("There is no initramfs needed to reserve\n");
     }
-    
-    // 4. 保留 Device Tree /reserved-memory
-    // 呼叫你之前寫的走訪函式，但記得要把 fdt_reserve_memory_nodes 裡面的 
-    // memory_reserve 改成 add_early_reserve！
+    // 4. Device Tree /reserved-memory
     fdt_reserve_memory_nodes(dtb_ptr);
     
-    uint64_t mem_map_size = actual_num_pages * sizeof(struct page);
+    // calculate the size of mem_map and find a safe region to place it
+    uint64_t mem_map_size = num_pages * sizeof(struct page);
     uint64_t safe_base = find_safe_base(mem_map_size);
-    
     mem_map = (struct page *)safe_base;
 
-    uart_puts("[Startup Allocator] mem_map placed safely at: ");
+    uart_puts("[Startup Allocator] mem_map placed at: ");
     uart_hex(safe_base);
     uart_puts(", size: ");
     uart_hex(mem_map_size);
     uart_putc('\n');
     
-    // initialize buddy system
+    // Initialize buddy system
     for (int i = 0; i <= MAX_ORDER; i++) {
         INIT_LIST_HEAD(&free_area[i]);
     }
@@ -178,8 +177,8 @@ void init_mem(unsigned long dtb_ptr){
         INIT_LIST_HEAD(&chunk_pools[i]);
     }
 
-    // Initialize Frame Array (🌟 改用 actual_num_pages)
-    for (int i = 0; i < actual_num_pages; i++) {
+    // Initialize Frame Array
+    for (int i = 0; i < num_pages; i++) {
         mem_map[i].val = 1;
         mem_map[i].order = -1;
         mem_map[i].pool_idx = -1;
@@ -187,34 +186,111 @@ void init_mem(unsigned long dtb_ptr){
         INIT_LIST_HEAD(&mem_map[i].list);
     }
 
-    // cutting into blocks of 2 ^ MAX_ORDER bytes and put them into free list (🌟 改用 actual_num_pages)
-    for (int i = 0; i < actual_num_pages; i += (1 << MAX_ORDER)) {
-        // 確保最後一塊有足夠的空間可以裝滿一個 MAX_ORDER
-        if (i + (1 << MAX_ORDER) <= actual_num_pages) {
+    // cutting into blocks of 2 ^ MAX_ORDER bytes and put them into free list
+    for (int i = 0; i < num_pages; i += (1 << MAX_ORDER)) {
+        // ensure the place is enough for 2 ^ MAX_ORDER bytes
+        if (i + (1 << MAX_ORDER) <= num_pages) {
             mem_map[i].order = MAX_ORDER;
             list_add_back(&mem_map[i].list, &free_area[MAX_ORDER]);
         }
     }
     
     uart_puts("--- Start Reserving Memory ---\n");
-
-    // 1. 跑迴圈把 Phase 1 記下來的清單全部交給 memory_reserve
+    uart_puts("Reserve mem_map region: ");
+    memory_reserve(safe_base, mem_map_size);
+    // save memory for reserved region
     for (int i = 0; i < num_early_reserved; i++) {
         uart_puts("Reserve recorded region: ");
         memory_reserve(early_reserved[i].start, early_reserved[i].end - early_reserved[i].start);
     }
-    memory_reserve(safe_base, mem_map_size);
     show_mem_alloc();
 }
 
+void fdt_reserve_memory_nodes(unsigned long dtb_ptr) {
+    int reserved_offset = fdt_path_offset(dtb_ptr, "/reserved-memory");
+    if (reserved_offset == -1)
+        return;
+
+    uart_puts("--- Parsing /reserved-memory ---\n");
+
+    const void* fdt = (const void*)dtb_ptr;
+    const struct fdt_header* hdr = (const struct fdt_header*)fdt;
+    const uint8_t* p = (const uint8_t*)fdt + reserved_offset;
+    
+    uint32_t token = bswap32(*(const uint32_t*)p);
+    if (token != FDT_BEGIN_NODE)
+        return; 
+    p += 4;
+
+    // skip the name of "/reserved-memory"  
+    int name_len = strlen((const char*)p);
+    p += ((name_len + 1 + 3) & ~3);
+
+    int depth = 1; // record the depth of checking
+    char* node_name; // the name of the region we find
+    int cnt = 0; // record the number of the region we find
+    while (1) {
+        token = bswap32(*(const uint32_t*)p);
+        p += 4;
+        if (token == FDT_BEGIN_NODE) { 
+            depth++;
+            int nlen = strlen((const char*)p);
+            if (depth == 2)
+                node_name = (char *)p;
+            p += ((nlen + 1 + 3) & ~3);
+        }
+        else if (token == FDT_END_NODE) { 
+            depth--;
+            // finish finding, exit this function
+            if (depth == 0)
+                return;
+        }
+        else if (token == FDT_PROP) { 
+            uint32_t len = bswap32(*(const uint32_t*)p);
+            uint32_t nameoff = bswap32(*(const uint32_t*)(p + 4));
+            p += 8;
+
+            const char* strings = (const char*)fdt + bswap32(hdr->off_dt_strings);
+            const char* prop_name = strings + nameoff;
+
+            // if prop == "reg", then get its base and size
+            if (strcmp(prop_name, "reg") == 0) {
+                const uint32_t* reg = (const uint32_t*)p;
+                uint64_t base = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
+                uint64_t size = ((uint64_t)bswap32(reg[2]) << 32) | bswap32(reg[3]);
+                
+                cnt++;
+                uart_dec(cnt);
+                uart_puts(". ");
+                uart_puts(node_name);
+                uart_puts(" begin: ");
+                uart_hex(base);
+                uart_puts(", size: ");
+                uart_hex(size);
+                uart_putc('\n');
+
+                add_early_reserve(base, size);
+            }
+            // skip the prop
+            p += ((len + 3) & ~3);;
+        }
+        else if (token == FDT_END) { 
+            break;
+        }
+    }
+}
+
+// convert page index to address
 unsigned long page_to_addr(int idx){
     return mem_start + idx * PAGE_SIZE;
 }
 
+// get the end page index in the same block
 int end_idx(int idx, int order){
     return idx + (1 << order) - 1;
 }
 
+// find the enough order for the size
 int size_to_order(unsigned int size) {
     int order = 0;
     while ((1 << order) * PAGE_SIZE < size) {
@@ -224,10 +300,13 @@ int size_to_order(unsigned int size) {
     return order;
 }
 
+// allocate blocks (size > 4KB)
 struct page* alloc_pages(unsigned int size) {
     int order = size_to_order(size);
-    if (order > MAX_ORDER)
+    if (order > MAX_ORDER){
+        uart_puts("The desired size is too big!\n");
         return NULL;
+    }
 
     int current_order = order;
     
@@ -243,7 +322,7 @@ struct page* alloc_pages(unsigned int size) {
         return NULL;
     }
 
-    struct page *target_page = list_front(&free_area[current_order]);
+    struct page *target_page = (struct page *)list_front(&free_area[current_order]);
     int target_idx = target_page - mem_map;
     list_remove(&target_page->list);
     
@@ -256,7 +335,8 @@ struct page* alloc_pages(unsigned int size) {
     uart_puts(", ");
     uart_dec(end_idx(target_idx, current_order));
     uart_puts("]\n");
-
+  
+    // save redundant area in free list
     while (current_order > order) {
         current_order--;
         // find the buddy page
@@ -296,22 +376,29 @@ struct page* alloc_pages(unsigned int size) {
     return target_page;
 }
 
+// return block (size >= 4KB)
 void free_pages(struct page* p) {
-    if (!p || p->val != 0)
+    if (!p){
+        uart_puts("The block pointer is NULL.\n");
         return;
+    }
+    if (p->val != 0){
+        uart_puts("This page isn't a head of block or not allocated.\n");
+        return;
+    }
 
     int order = p->order;
     int page_idx = p - mem_map;
     int original_idx = page_idx;
-
+    
+    // find its buddy and merge them to put in free list of the next order
     while (order < MAX_ORDER) {
         int buddy_idx = page_idx ^ (1 << order);
         struct page *buddy = &mem_map[buddy_idx];
 
-        // check buddy isn't used
-        if (!buddy->val || buddy->order != order) {
+        // buddy is used or not in free list of this order
+        if (!buddy->val || buddy->order != order)
             break;
-        }
         
         uart_puts("[*] Buddy found! buddy idx: ");
         uart_dec(buddy_idx);
@@ -341,7 +428,7 @@ void free_pages(struct page* p) {
             p = buddy;
             buddy = tmp;
         }
-        buddy->order = -1; // buddy isn't a head anymore
+        buddy->order = -1; // buddy isn't a head of block anymore
         order++;
     }
 
@@ -371,6 +458,7 @@ void free_pages(struct page* p) {
     show_mem_alloc();
 }
 
+// Allocate a chunk
 void *kmalloc(unsigned int size) {
     int pool_idx = -1;
     for (int i = 0; i < NUM_POOLS; i++) {
@@ -379,34 +467,38 @@ void *kmalloc(unsigned int size) {
             break;
         }
     }
-    if (pool_idx == -1) return NULL; // 保險機制，過大會給 Buddy 處理
-
+    // this size is too big for a chunk
+    if (pool_idx == -1)
+        return NULL;
+    
+    // There is no chunk of this size, so it needs a page (4KB) to manage chunk pool
     if (list_empty(&chunk_pools[pool_idx])) {
-        // 向 Buddy 請求 1 個 Page (PAGE_SIZE bytes)
         struct page *new_page = alloc_pages(PAGE_SIZE);
-        if (!new_page) return NULL; 
-
-        new_page->pool_idx = pool_idx; // 標記這個 Page 屬於這個 pool
+        if (!new_page){
+            uart_puts("There is no space to manage chunk pool.\n");
+            return NULL;
+        }
+        // This page is for a chunk pool of this chunk size
+        new_page->pool_idx = pool_idx;
         
         int chunk_size = pool_sizes[pool_idx];
         unsigned long page_addr = page_to_addr(new_page - mem_map);
 
-        // 切割成小塊，並放入對應的 free list 中
+        // cut the page to some pieces and put them into chunk pool 
         for (int offset = 0; offset < PAGE_SIZE; offset += chunk_size) {
             struct list_head *chunk = (struct list_head *)(page_addr + offset);
             list_add_back(chunk, &chunk_pools[pool_idx]);
         }
     }
 
-    // 從 Pool 中拿出第一個可用的 Chunk
-    struct list_head *target_chunk = chunk_pools[pool_idx].next;
-    list_remove(target_chunk);
+    struct page *target_chunk = (struct page *)list_front(&chunk_pools[pool_idx]);
+    list_remove(&target_chunk->list);
     
-    // 🌟 NEW: 找到這個 chunk 屬於哪一個 Page，並將借出數量 +1
+    // Find the page base address of this chunk, and update the number of used chunks
     unsigned long chunk_addr = (unsigned long)target_chunk;
     unsigned long base_addr = chunk_addr & ~((unsigned long)PAGE_SIZE - 1);
     int page_idx = (base_addr - mem_start) / PAGE_SIZE;
-    mem_map[page_idx].chunk_count++; // 借出一個，計數 +1
+    mem_map[page_idx].chunk_count++;
 
     uart_puts("[Chunk] Allocate ");
     uart_hex((unsigned long)target_chunk);
@@ -417,18 +509,25 @@ void *kmalloc(unsigned int size) {
     return (void *)target_chunk;
 }
 
+// Free a chunk
 void kfree(void *ptr) {
-    if (!ptr) return;
+    if (!ptr) {
+        uart_puts("The chunk pointer is NULL.\n");
+        return;
+    }
 
+    // Find the page base address of this chunk
     unsigned long addr = (unsigned long)ptr;
-    // 透過抹除低 12 bits 找到 Page 的起始位址
     unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1);
-    
+    // get the pool index to find the chunk size
     int page_idx = (base_addr - mem_start) / PAGE_SIZE;
     struct page *p = &mem_map[page_idx];
     int pool_idx = p->pool_idx;
 
-    if (pool_idx == -1) return; // 這不是 kmalloc 分配的，不應呼叫此函式
+    if (pool_idx == -1) {
+        uart_puts("This page isn't for chunk pool.\n");
+        return;
+    }
 
     uart_puts("[Chunk] Free ");
     uart_hex(addr);
@@ -436,68 +535,63 @@ void kfree(void *ptr) {
     uart_dec(pool_sizes[pool_idx]);
     uart_putc('\n');
     
-    // 🌟 NEW: 歸還一個 Chunk，計數器 -1
     p->chunk_count--;
 
-    // 判斷是否整頁都空了
+    // if all chunks in the same page are return, returning the page to free list
     if (p->chunk_count == 0) {
-        
         int chunk_size = pool_sizes[pool_idx];
-        
-        // 既然整頁都空了，代表除了現在這個 ptr 以外，
-        // 該頁其他的 chunk 早就被 kfree 過，並掛在 chunk_pools[pool_idx] 裡面了。
-        // 我們必須把它們從串列上拔下來，不然 Buddy 拿走這塊記憶體後，串列就壞掉了！
+        // remove all chunks in the same page from chunk pool, except the current freed chunk
         for (int offset = 0; offset < PAGE_SIZE; offset += chunk_size) {
             unsigned long current_chunk_addr = base_addr + offset;
-            
-            // 只要不是這次傳進來的 ptr，就代表它已經在 free list 裡面，直接拔除！
             if (current_chunk_addr != addr) {
                 struct list_head *chunk_to_remove = (struct list_head *)current_chunk_addr;
                 list_remove(chunk_to_remove);
             }
         }
-
-        // 重置 Page 狀態並還給 Buddy System
         p->pool_idx = -1;
         free_pages(p); 
         uart_puts("[Pool] Page completely free! Returning to Buddy.\n");
-
-    } else {
-        // 如果還有其他 chunk 沒還回來，那就單純把這個 chunk 掛回 Pool 中
+    }
+    else {
         struct list_head *chunk = (struct list_head *)ptr;
         list_add_back(chunk, &chunk_pools[pool_idx]);
     }
 }
 
 void *allocate(unsigned int size) {
-    if (size == 0) return NULL;
+    if (size == 0){
+        uart_puts("Can't allocate a 0 size region\n");
+        return NULL;
+    }
 
-    // 小於等於 2048 Bytes，交給動態分配器
+    // size <= 512, allocate a chunk
     if (size <= pool_sizes[NUM_POOLS - 1]) {
         return kmalloc(size);
     } 
-    // 大於 2048 Bytes，交給 Buddy System
+    // size > 512, allocate a block
     else {
         struct page *p = alloc_pages(size);
-        if (!p) return NULL;
-        return (void *)page_to_addr(p - mem_map);
+        if (!p)
+            return NULL;
+        return (void *)page_to_addr(p - mem_map); // return frame address
     }
 }
 
 void free(void *ptr) {
-    if (!ptr) return;
-
+    if (!ptr){
+        uart_puts("The point is NULL.\n");
+        return;
+    }
     unsigned long addr = (unsigned long)ptr;
-    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1);
+    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1); // for chunk
     int page_idx = (base_addr - mem_start) / PAGE_SIZE;
     struct page *p = &mem_map[page_idx];
 
-    // 透過 pool_idx 判斷交由誰來釋放
-    if (p->pool_idx != -1) {
+    // Decide to free a block or chunk
+    if (p->pool_idx != -1)
         kfree(ptr);
-    } else {
+    else
         free_pages(p);
-    }
 }
 
 void show_mem_alloc() {
@@ -541,18 +635,13 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
         uart_puts(".\n");
         res_end = mem_end;
     }
-
-    // 換算成起始與結束的 Page Frame Number (PFN)
+    // calculate the page index
     int start_pfn = (res_start - mem_start) / PAGE_SIZE;
-    int end_pfn = (res_end - mem_start + PAGE_SIZE - 1) / PAGE_SIZE; // 向上對齊 (Ceiling)
+    int end_pfn = (res_end - mem_start + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    // 從最大的區塊開始找，有重疊就切半往下一層丟
     for (int order = MAX_ORDER; order >= 0; order--) {
-        
-        // 必須先存好 next 節點 (Safe Iteration)
-        // 因為如果這個區塊被拔除 (list_remove)，它的 next 指標就會被清空
-        struct list_head *curr = free_area[order].next;
-        
+        struct list_head *curr = list_front(&free_area[order]);
+        // In the loop, curr isn't a head node of list
         while (curr != &free_area[order]) {
             struct list_head *next_node = curr->next;
             
@@ -561,27 +650,30 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             int block_start = pfn;
             int block_end = pfn + (1 << order);
 
-            // 狀況 1: 完全沒有重疊 (Outside) -> 不關它的事，看下一個
+            // No overlap
             if (block_end <= start_pfn || block_start >= end_pfn) {
                 curr = next_node;
                 continue;
             }
 
-            // 只要有重疊，就先從當前的 free_area 串列中拔除
+            // if overlap, remove from free list of this order
             list_remove(curr);
 
-            // 狀況 2: 完全被包覆 (Inside) -> 精準命中，保留起來！
+            // full overlap
             if (block_start >= start_pfn && block_end <= end_pfn) {
-                p->val = 0; // 0 代表被佔用 (reserved)
+                p->val = 0;
                 p->order = -1;
                 p->pool_idx = -1;
 
                 uart_puts("[Reserve] Reserve address [");
-                uart_hex(page_to_addr(block_start)); uart_puts(", ");
+                uart_hex(page_to_addr(block_start));
+                uart_puts(", ");
                 uart_hex(page_to_addr(block_end));
                 uart_puts("). Range of pages: [");
-                uart_dec(block_start); uart_puts(", ");
-                uart_dec(block_end); uart_puts(")");
+                uart_dec(block_start);
+                uart_puts(", ");
+                uart_dec(block_end);
+                uart_puts(")");
                 uart_puts(", order = ");
                 uart_dec(order);
                 uart_putc('\n');
@@ -597,8 +689,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             p->order = next_order;
             buddy->order = next_order;
 
-            // 將切半的兩個區塊加到下一層的 free_area
-            // 下一個迴圈 (order - 1) 就會對這兩個小區塊進行更細部的檢查
+            // This order is too big, so halve the size and put them into free list of next order
             list_add_back(&p->list, &free_area[next_order]);
             list_add_back(&buddy->list, &free_area[next_order]);
 
@@ -634,6 +725,7 @@ void alloc_test(){
     char *kmem_ptr5 = (char *)allocate(16);
     char *kmem_ptr6 = (char *)allocate(32);
 
+    free(kmem_ptr5);
     free(kmem_ptr5);
     free(kmem_ptr6);
     
