@@ -1,8 +1,10 @@
 #include "sbi.h"
 
-#define SBI_EXT_SET_TIMER 0x0
+#define SBI_EXT_TIME      0x0
 #define SBI_EXT_SHUTDOWN  0x8
 #define SBI_EXT_BASE      0x10
+
+#define SBI_FID_SET_TIMER 0
 
 enum sbi_ext_base_fid {
     SBI_EXT_BASE_GET_SPEC_VERSION,
@@ -69,4 +71,9 @@ long sbi_get_impl_id(void){
 
 long sbi_get_impl_version(void){
     return sbi_ecall(SBI_EXT_BASE, SBI_EXT_BASE_GET_IMP_VERSION, 0, 0, 0, 0, 0, 0).value;
+}
+
+void sbi_set_timer(unsigned long stime_value) {
+    // 傳入 extension id, function id, 以及 target_time (arg0)
+    sbi_ecall(SBI_EXT_TIME, SBI_FID_SET_TIMER, stime_value, 0, 0, 0, 0, 0);
 }

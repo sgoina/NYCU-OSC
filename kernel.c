@@ -3,6 +3,7 @@
 #include "uart.h"
 #include "ramfs.h"
 #include "mem_alloc.h"
+#include "timer.h"
 
 extern char _start[];
 extern char _end[];
@@ -17,6 +18,7 @@ void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     }
     
     init_mem(dtb_ptr);
+    timer_init(dtb_ptr);
     
     start_kernel_shell(hartid, dtb_ptr);
 }

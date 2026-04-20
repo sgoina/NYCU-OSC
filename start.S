@@ -14,6 +14,8 @@ clear_bss_loop:
     blt t0, t1, clear_bss_loop
 
 clear_bss_done: 
+    la a2, handle_exception
+    csrw stvec, a2
     la sp, _end
     tail start_main      
     

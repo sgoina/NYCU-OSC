@@ -167,8 +167,6 @@ int exec(const char *filename){
             
             // 4. 將進入點寫入 sepc
             asm volatile("csrw sepc, %0" : : "r"(entry_point));
-            
-            asm volatile("csrw stvec, %0" : : "r"(handle_exception));
 
             // 5. 切換 Stack 並進入 User Mode
             // 【關鍵點】我們必須把目前的 Kernel SP 存入 sscratch。
