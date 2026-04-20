@@ -173,6 +173,10 @@ void start_kernel_shell(){
         else if (strcmp(buffer, "allocate") == 0){
             alloc_test();
         }
+        else if (strcmp(buffer, "exec") == 0){
+            if (exec("prog.bin"))
+                uart_puts("Failed to exec user program!\n");
+        }
         // unknown command
         else {
             uart_puts("Unknown command: ");

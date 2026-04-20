@@ -87,9 +87,8 @@ int strncmp(const char *s1, const char *s2, int n) {
         n--;
     }
     // perfect match in n chars
-    if (n == 0) {
+    if (n == 0)
         return 0; 
-    } 
     // not match
     return (*(unsigned char *)s1 - *(unsigned char *)s2);
 }

@@ -1,25 +1,13 @@
 #include "ramfs.h"
 #include "deviceTree.h"
 #include "uart.h"
+#include "trap.h"
+#include "mem_alloc.h"
 
+extern void handle_exception(void);
+
+#define STACK_SIZE  0x1000
 static void *cpio_address = 0;
-
-struct cpio_t {
-    char magic[6];
-    char ino[8];
-    char mode[8];
-    char uid[8];
-    char gid[8];
-    char nlink[8];
-    char mtime[8];
-    char filesize[8];
-    char devmajor[8];
-    char devminor[8];
-    char rdevmajor[8];
-    char rdevminor[8];
-    char namesize[8];
-    char check[8];
-};
 
 /**
  * @brief Convert a hexadecimal string to integer
@@ -149,4 +137,53 @@ void cat_file_content(const char* filename) {
         ptr += next_header_offset;
     }
     return;
+}
+
+int exec(const char *filename){
+    char *ptr = (char *)cpio_address;
+    while (strncmp(ptr + sizeof(struct cpio_t), "TRAILER!!!", 10)) {
+        struct cpio_t* hdr = (struct cpio_t*)ptr;
+        int namesize = hextoi(hdr->namesize, 8);
+        int filesize = hextoi(hdr->filesize, 8);
+        int headsize = align(sizeof(struct cpio_t) + namesize, 4);
+        int datasize = align(filesize, 4);
+        if (!strncmp(ptr + sizeof(struct cpio_t), filename, namesize)){
+            // 1. 取得程式的進入點 (Header 之後緊接著就是檔案內容)
+            void* entry_point = (void*)(ptr + headsize);
+            
+            // 2. 配置一頁記憶體作為 User Stack
+            void* user_stack = allocate(STACK_SIZE);
+            // Stack 由高位址往低位址生長，所以指標要指到記憶體區塊的頂部
+            unsigned long user_sp = (unsigned long)user_stack + STACK_SIZE;
+
+            // 3. 設定 sstatus
+            unsigned long sstatus;
+            asm volatile("csrr %0, sstatus" : "=r"(sstatus));
+            // 清除 SPP (bit 8) 將 Previous Privilege 設為 0 (User Mode)
+            // 設定 SPIE (bit 5) 以允許在 User Mode 時發生中斷
+            sstatus &= ~(1 << 8); 
+            sstatus |= (1 << 5);  
+            asm volatile("csrw sstatus, %0" : : "r"(sstatus));
+            
+            // 4. 將進入點寫入 sepc
+            asm volatile("csrw sepc, %0" : : "r"(entry_point));
+            
+            asm volatile("csrw stvec, %0" : : "r"(handle_exception));
+
+            // 5. 切換 Stack 並進入 User Mode
+            // 【關鍵點】我們必須把目前的 Kernel SP 存入 sscratch。
+            // 這樣將來 User Program 觸發 Exception (Trap) 回到 start.S 時，
+            // csrrw sp, sscratch, sp 才能順利拿到 Kernel Stack 來儲存 Context。
+            asm volatile(
+                "csrw sscratch, sp\n\t" // 將目前的 Kernel SP 備份到 sscratch
+                "mv sp, %0\n\t"         // 將 CPU 的 SP 切換成剛分配好的 User SP
+                "sret\n\t"              // 執行 sret，硬體會跳轉到 sepc 並降級為 U-mode
+                : 
+                : "r"(user_sp)
+            );
+            return 0; 
+        }
+        ptr += headsize + datasize;
+    }
+    return -1;
 }
