@@ -323,10 +323,10 @@ struct page* alloc_pages(unsigned int size) {
     }
 
     struct page *target_page = (struct page *)list_front(&free_area[current_order]);
-    int target_idx = target_page - mem_map;
+    //int target_idx = target_page - mem_map;
     list_remove(&target_page->list);
     
-    uart_puts("[-] Remove page ");
+    /*uart_puts("[-] Remove page ");
     uart_dec(target_idx);
     uart_puts(" from order ");
     uart_dec(current_order);
@@ -334,7 +334,7 @@ struct page* alloc_pages(unsigned int size) {
     uart_dec(target_idx);
     uart_puts(", ");
     uart_dec(end_idx(target_idx, current_order));
-    uart_puts("]\n");
+    uart_puts("]\n");*/
   
     // save redundant area in free list
     while (current_order > order) {
@@ -349,7 +349,7 @@ struct page* alloc_pages(unsigned int size) {
         buddy_page->order = current_order;
         list_add_back(&buddy_page->list, &free_area[current_order]);
         
-        uart_puts("[+] Add page ");
+        /*uart_puts("[+] Add page ");
         uart_dec(buddy_idx);
         uart_puts(" to order ");
         uart_dec(current_order);
@@ -357,22 +357,22 @@ struct page* alloc_pages(unsigned int size) {
         uart_dec(buddy_idx);
         uart_puts(", ");
         uart_dec(end_idx(buddy_idx, current_order));
-        uart_puts("]\n");
+        uart_puts("]\n");*/
     }
 
     // return block
     target_page->val = 0;
     target_page->order = order;
     
-    unsigned int addr = page_to_addr(target_idx);
+    /*unsigned int addr = page_to_addr(target_idx);
     uart_puts("[Page] Allocate ");
     uart_hex(addr);
     uart_puts(" at order ");
     uart_dec(order);
     uart_puts(", page ");
     uart_dec(target_idx);
-    uart_putc('\n');
-    show_mem_alloc();
+    uart_putc('\n');*/
+    //show_mem_alloc();
     return target_page;
 }
 
@@ -389,7 +389,7 @@ void free_pages(struct page* p) {
 
     int order = p->order;
     int page_idx = p - mem_map;
-    int original_idx = page_idx;
+    //int original_idx = page_idx;
     
     // find its buddy and merge them to put in free list of the next order
     while (order < MAX_ORDER) {
@@ -400,18 +400,18 @@ void free_pages(struct page* p) {
         if (!buddy->val || buddy->order != order)
             break;
         
-        uart_puts("[*] Buddy found! buddy idx: ");
+        /*uart_puts("[*] Buddy found! buddy idx: ");
         uart_dec(buddy_idx);
         uart_puts(" for page ");
         uart_dec(page_idx);
         uart_puts(" with order ");
         uart_dec(order);
-        uart_putc('\n');
+        uart_putc('\n');*/
         
         // remove buddy page from free list
         list_remove(&buddy->list);
         
-        uart_puts("[-] Remove page ");
+        /*uart_puts("[-] Remove page ");
         uart_dec(buddy_idx);
         uart_puts(" from order ");
         uart_dec(order);
@@ -419,7 +419,7 @@ void free_pages(struct page* p) {
         uart_dec(buddy_idx);
         uart_puts(", ");
         uart_dec(end_idx(buddy_idx, order));
-        uart_puts("]\n");
+        uart_puts("]\n");*/
         
         // take the min idx
         if (buddy_idx < page_idx) {
@@ -437,7 +437,7 @@ void free_pages(struct page* p) {
     p->order = order;
     list_add_back(&p->list, &free_area[order]);
     
-    uart_puts("[+] Add page ");
+    /*uart_puts("[+] Add page ");
     uart_dec(page_idx);
     uart_puts(" to order ");
     uart_dec(order);
@@ -445,17 +445,17 @@ void free_pages(struct page* p) {
     uart_dec(page_idx);
     uart_puts(", ");
     uart_dec(end_idx(page_idx, order));
-    uart_puts("]\n");
+    uart_puts("]\n");*/
     
-    uart_puts("[Page] Free ");
+    /*uart_puts("[Page] Free ");
     uart_hex(page_to_addr(original_idx));
     uart_puts(" and add back to order ");
     uart_dec(order);
     uart_puts(", page ");
     uart_dec(page_idx);
-    uart_putc('\n');
+    uart_putc('\n');*/
     
-    show_mem_alloc();
+    //show_mem_alloc();
 }
 
 // Allocate a chunk
@@ -500,11 +500,11 @@ void *kmalloc(unsigned int size) {
     int page_idx = (base_addr - mem_start) / PAGE_SIZE;
     mem_map[page_idx].chunk_count++;
 
-    uart_puts("[Chunk] Allocate ");
+    /*uart_puts("[Chunk] Allocate ");
     uart_hex((unsigned long)target_chunk);
     uart_puts(" at chunk size ");
     uart_dec(pool_sizes[pool_idx]);
-    uart_putc('\n');
+    uart_putc('\n');*/
 
     return (void *)target_chunk;
 }
@@ -529,11 +529,11 @@ void kfree(void *ptr) {
         return;
     }
 
-    uart_puts("[Chunk] Free ");
+    /*uart_puts("[Chunk] Free ");
     uart_hex(addr);
     uart_puts(" at chunk size ");
     uart_dec(pool_sizes[pool_idx]);
-    uart_putc('\n');
+    uart_putc('\n');*/
     
     p->chunk_count--;
 
@@ -550,7 +550,7 @@ void kfree(void *ptr) {
         }
         p->pool_idx = -1;
         free_pages(p); 
-        uart_puts("[Pool] Page completely free! Returning to Buddy.\n");
+        //uart_puts("[Pool] Page completely free! Returning to Buddy.\n");
     }
     else {
         struct list_head *chunk = (struct list_head *)ptr;
@@ -605,13 +605,13 @@ void show_mem_alloc() {
 }
 
 void memory_reserve(unsigned long long start, unsigned long long size) {
-    uart_puts("begin: ");
+    /*uart_puts("begin: ");
     uart_hex(start);
     uart_puts(", end: ");
     uart_hex(start + size);
     uart_puts(", size: ");
     uart_hex(size);
-    uart_putc('\n');
+    uart_putc('\n');*/
     if (size == 0)
         return;
 
@@ -658,7 +658,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
 
             // if overlap, remove from free list of this order
             list_remove(curr);
-            uart_puts("[-] Remove page ");
+            /*uart_puts("[-] Remove page ");
             uart_dec(pfn);
             uart_puts(" from order ");
             uart_dec(order);
@@ -666,7 +666,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             uart_dec(pfn);
             uart_puts(", ");
             uart_dec(end_idx(pfn, order));
-            uart_puts("]\n");
+            uart_puts("]\n");*/
 
             // full overlap
             if (block_start >= start_pfn && block_end <= end_pfn) {
@@ -674,7 +674,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
                 p->order = -1;
                 p->pool_idx = -1;
 
-                uart_puts("[Reserve] Reserve address [");
+                /*uart_puts("[Reserve] Reserve address [");
                 uart_hex(page_to_addr(block_start));
                 uart_puts(", ");
                 uart_hex(page_to_addr(block_end));
@@ -685,7 +685,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
                 uart_puts(")");
                 uart_puts(", order = ");
                 uart_dec(order);
-                uart_putc('\n');
+                uart_putc('\n');*/
 
                 curr = next_node;
                 continue;
@@ -703,7 +703,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             list_add_back(&p->list, &free_area[next_order]);
             list_add_back(&buddy->list, &free_area[next_order]);
             
-            uart_puts("[+] Add page ");
+            /*uart_puts("[+] Add page ");
             uart_dec(pfn);
             uart_puts(" to order ");
             uart_dec(next_order);
@@ -720,7 +720,7 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             uart_dec(buddy_idx);
             uart_puts(", ");
             uart_dec(end_idx(buddy_idx, next_order));
-            uart_puts("]\n");
+            uart_puts("]\n");*/
 
             curr = next_node;
         }

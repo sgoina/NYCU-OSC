@@ -24,9 +24,9 @@ void irq_enable(){
 void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     boot_cpu_hartid = hartid;
     
-    timer_init(dtb_ptr);
     uart_init(dtb_ptr);
     plic_init(dtb_ptr);
+    timer_init(dtb_ptr);
     irq_enable();
     
     uart_puts("New Kernel! New Kernel! New Kernel! New Kernel!\n");

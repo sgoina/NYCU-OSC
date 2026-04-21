@@ -27,18 +27,9 @@ void do_trap(struct pt_regs* regs) {
                 plic_complete(irq);
         }
         else if (exception_code == 5) { // 5 代表 Supervisor Timer Interrupt
-            static int seconds_passed = 0;
-            seconds_passed += 2;
-            
-            // 印出經過的時間
-            uart_puts("boot time: ");
-            // 假設你有 uart_int 函式，沒有的話可以用你的方式印出數字
-            uart_dec(seconds_passed); 
-            uart_putc('\n');
-
-            // ⭐ 關鍵：設定下一次的 Timer，不然它只會響一次！
-            sbi_set_timer(get_time() + CPU_FREQ * 2);
-        } else {
+            handle_timer_interrupt();
+        }
+        else {
             uart_puts("Unknown Interrupt!\n");
         }
     }
