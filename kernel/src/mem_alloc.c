@@ -192,16 +192,6 @@ void init_mem(unsigned long dtb_ptr){
         if (i + (1 << MAX_ORDER) <= num_pages) {
             mem_map[i].order = MAX_ORDER;
             list_add_back(&mem_map[i].list, &free_area[MAX_ORDER]);
-            
-            uart_puts("[+] Add page ");
-            uart_dec(i);
-            uart_puts(" to order ");
-            uart_dec(MAX_ORDER);
-            uart_puts(". Range of pages: [");
-            uart_dec(i);
-            uart_puts(", ");
-            uart_dec(end_idx(i, MAX_ORDER));
-            uart_puts("]\n");
         }
     }
     

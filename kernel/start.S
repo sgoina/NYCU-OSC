@@ -18,43 +18,6 @@ clear_bss_done:
     csrw stvec, a2
     la sp, _end
     tail start_main      
-    
-relocate:
-    // save parameters
-    mv s0, a0              // s0 = hartid
-    mv s1, a1              // s1 = dtb_ptr
-    mv s2, a2              // s2 = continue_func (high address)
-
-    la t0, _load_start     // Old boot loader base
-    la t1, _load_end       // Old boot loader end
-    li t2, RELOC_DEST      // Destination
-
-copy_loop:
-    bgeu t0, t1, copy_done
-    ld   t3, 0(t0)           // move data to tmp
-    sd   t3, 0(t2)           // move tmp to new address
-    addi t0, t0, 8
-    addi t2, t2, 8
-    j    copy_loop
-
-copy_done:
-    .insn i 0x0F, 0x1, x0, x0, 0x000
-    // .insn: Assembler
-    // i    : I-type (Immediate)
-    // 0x0F : Opcode (MISC-MEM)
-    // 0x1  : Funct3 (fence.i)
-    // x0   : rd (register destination)
-    // x0   : rs1 (register source 1)
-    // 0x000: Immediate number (12 bits)
-    
-    li   t0, RELOC_DEST
-    la   t1, _load_start
-    sub  t2, t0, t1          // Calculate the offset of relocation
-    add  sp, sp, t2          // New stack pointer address
-
-    mv   a0, s0              // a0 = hartid
-    mv   a1, s1              // s1 = dtb_ptr
-    jr   s2                  // return to continue_func(high)
 
 .global handle_exception
 .align 2

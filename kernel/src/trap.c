@@ -2,8 +2,11 @@
 #include "uart.h"
 #include "sbi.h"
 #include "timer.h"
+#include "plic.h"
 
+extern int uart_irq;
 extern unsigned int CPU_FREQ;
+extern unsigned int boot_cpu_hartid;
 
 void do_trap(struct pt_regs* regs) {
     unsigned long cause = regs->scause;
@@ -14,7 +17,16 @@ void do_trap(struct pt_regs* regs) {
 
     if (is_interrupt) {
         // === 這裡是 Interrupt 的處理區塊 ===
-        if (exception_code == 5) { // 5 代表 Supervisor Timer Interrupt
+        if (exception_code == 9) { // 9 代表 SEI (External Interrupt)
+            int irq = plic_claim();
+            
+            if (irq == uart_irq) 
+                handle_uart_interrupt();
+            
+            if (irq)
+                plic_complete(irq);
+        }
+        else if (exception_code == 5) { // 5 代表 Supervisor Timer Interrupt
             static int seconds_passed = 0;
             seconds_passed += 2;
             
