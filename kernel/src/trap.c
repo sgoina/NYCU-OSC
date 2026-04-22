@@ -3,6 +3,7 @@
 #include "sbi.h"
 #include "timer.h"
 #include "plic.h"
+#include "task.h"
 
 extern int uart_irq;
 extern unsigned int CPU_FREQ;
@@ -52,4 +53,13 @@ void do_trap(struct pt_regs* regs) {
         // (2) Increment the sepc register by 4 for traps
         regs->sepc += 4;
     }
+    // 1. 主動打開 CPU 總開關，允許高優先級的硬體中斷插隊 (Nested Trap)！
+    asm volatile("csrsi sstatus, 2"); 
+    
+    // 2. 執行所有耗時的 Task (例如 uart_puts)
+    run_tasks();
+    
+    // 3. 執行完畢，準備返回 start.S 恢復 Context 之前，必須再次關閉中斷
+    // (如果不在這裡關閉，start.S 恢復暫存器到一半被打斷會大當機)
+    asm volatile("csrci sstatus, 2");
 }

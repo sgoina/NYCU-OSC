@@ -37,8 +37,8 @@ static inline void __list_del(struct list_head *prev, struct list_head *next) {
 // delete a chosen node
 static inline void list_remove(struct list_head *entry) {
     __list_del(entry->prev, entry->next);
-    entry->next = NULL;
-    entry->prev = NULL;
+    entry->next = (void *)0;
+    entry->prev = (void *)0;
 }
 
 // show whether the list is empty

@@ -148,34 +148,51 @@ int exec(const char *filename){
         int headsize = align(sizeof(struct cpio_t) + namesize, 4);
         int datasize = align(filesize, 4);
         if (!strncmp(ptr + sizeof(struct cpio_t), filename, namesize)){
-            // 1. 取得程式的進入點 (Header 之後緊接著就是檔案內容)
-            void* entry_point = (void*)(ptr + headsize);
+            // 1. 取得原始程式碼在 CPIO 中的位置與大小
+            void* original_code = (void*)(ptr + headsize);
             
-            // 2. 配置一頁記憶體作為 User Stack
-            void* user_stack = allocate(STACK_SIZE);
-            // Stack 由高位址往低位址生長，所以指標要指到記憶體區塊的頂部
-            unsigned long user_sp = (unsigned long)user_stack + STACK_SIZE;
+            // 2. 計算總需要的記憶體大小 (Code + Stack)
+            int total_size = filesize + STACK_SIZE;
+            
+            // 【重要】將總大小對齊到 16 bytes，確保未來的 User SP 也是 16-byte 對齊
+            total_size = (total_size + 15) & ~15; 
 
-            // 3. 設定 sstatus
+            // 3. 一次配置一塊「大」記憶體
+            void* user_memory = allocate(total_size); 
+            if (!user_memory) {
+                uart_puts("Memory allocation failed!\n");
+                return -1;
+            }
+
+            // 4. 將程式碼從 CPIO 複製到記憶體的「底部」 (低位址)
+            char *src = (char *)original_code;
+            char *dst = (char *)user_memory;
+            for (int i = 0; i < filesize; i++) {
+                dst[i] = src[i];
+            }
+
+            // 5. 設定進入點 (Entry Point) 為剛配置的記憶體起始位址
+            void* entry_point = user_memory;
+            
+            // 6. 設定 User Stack
+            // Stack 由高位址往低位址生長，所以指標要指到這塊大記憶體的「最頂部」
+            unsigned long user_sp = (unsigned long)user_memory + total_size;
+
+            // 7. 設定 sstatus 準備進入 User Mode
             unsigned long sstatus;
             asm volatile("csrr %0, sstatus" : "=r"(sstatus));
-            // 清除 SPP (bit 8) 將 Previous Privilege 設為 0 (User Mode)
-            // 設定 SPIE (bit 5) 以允許在 User Mode 時發生中斷
-            sstatus &= ~(1 << 8); 
-            sstatus |= (1 << 5);  
+            sstatus &= ~(1 << 8); // 清除 SPP，設定 Previous Privilege 為 0 (User Mode)
+            sstatus |= (1 << 5);  // 設定 SPIE，允許 U-mode 發生中斷
             asm volatile("csrw sstatus, %0" : : "r"(sstatus));
             
-            // 4. 將進入點寫入 sepc
+            // 8. 將進入點寫入 sepc
             asm volatile("csrw sepc, %0" : : "r"(entry_point));
 
-            // 5. 切換 Stack 並進入 User Mode
-            // 【關鍵點】我們必須把目前的 Kernel SP 存入 sscratch。
-            // 這樣將來 User Program 觸發 Exception (Trap) 回到 start.S 時，
-            // csrrw sp, sscratch, sp 才能順利拿到 Kernel Stack 來儲存 Context。
+            // 9. 備份 Kernel SP、切換 User SP 並進入 User Mode
             asm volatile(
-                "csrw sscratch, sp\n\t" // 將目前的 Kernel SP 備份到 sscratch
-                "mv sp, %0\n\t"         // 將 CPU 的 SP 切換成剛分配好的 User SP
-                "sret\n\t"              // 執行 sret，硬體會跳轉到 sepc 並降級為 U-mode
+                "csrw sscratch, sp\n\t" // 備份 Kernel SP
+                "mv sp, %0\n\t"         // 切換成剛算好的 User SP
+                "sret\n\t"              // 降級並跳轉
                 : 
                 : "r"(user_sp)
             );

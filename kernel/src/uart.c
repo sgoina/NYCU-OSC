@@ -60,23 +60,10 @@ void uart_putc(char c) {
     // 當 TX Buffer 滿時等待
     if (c == '\n') 
         uart_putc('\r'); 
-    // 1. 檢查當前是否處於「關閉中斷」的狀態 (Critical Section)
-    unsigned long current_sstatus;
-    asm volatile("csrr %0, sstatus" : "=r"(current_sstatus));
-    int irq_enabled = current_sstatus & (1 << 1); // 檢查 SIE (bit 1) 是否為 1
 
     // 2. 當 TX Buffer 滿時的等待邏輯
     while (is_full(&tx_buf)) {
-        if (irq_enabled) {
-            // 安全：中斷有開，可以安心休眠等硬體叫醒
-            asm volatile("wfi");
-        } else {
-            // 🚨 危險：中斷被關了！絕對不能 wfi！
-            // 必須手動擔任 ISR 的角色，把 Buffer 裡的東西丟給硬體
-            if (*UART_LSR & LSR_TDRQ) {
-                *UART_THR = pop(&tx_buf);
-            }
-        }
+        
     }
 
     // 3. 進入 Critical Section 保護 shared buffer (原本的邏輯)

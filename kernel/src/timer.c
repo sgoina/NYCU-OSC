@@ -3,6 +3,7 @@
 #include "timer.h"
 #include "sbi.h"
 #include "mem_alloc.h"
+#include "task.h"
 
 unsigned int CPU_FREQ = 0;
 
@@ -24,10 +25,6 @@ void timer_init(unsigned long dtb_ptr) {
         CPU_FREQ = bswap32(*(const unsigned int*)prop);    
     else 
         return;
-    
-    // 1. 設定第一次的目標時間：現在時間 + 2秒的 ticks
-    unsigned long long current_time = get_time();
-    sbi_set_timer(current_time + CPU_FREQ * 2);
 
     // 2. 開啟 Supervisor Timer Interrupt Enable (sie.STIE, bit 5)
     unsigned long sie;
@@ -66,7 +63,8 @@ void add_timer(timer_callback_t cb, char* arg, unsigned long duration_sec) {
         // ⭐ 關鍵：更新硬體鬧鐘，提早叫醒 CPU
         // sbi_set_timer 是 OpenSBI 提供的 API
         sbi_set_timer(new_node->expire_time); 
-    } else {
+    }
+    else {
         // 情況 B：尋找合適的插入點
         timer_node_t* current = timer_list_head;
         while (current->next != NULL && current->next->expire_time <= new_node->expire_time) {
@@ -91,9 +89,8 @@ void handle_timer_interrupt() {
         timer_list_head = timer_list_head->next; 
 
         // 執行使用者設定的 Callback
-        expired_node->callback(expired_node->arg);
+        add_task(expired_node->callback, expired_node->arg, 5);
 
-        // 如果你的 allocate 系統有實作 free，記得在這裡釋放：
         free(expired_node); 
     }
 
@@ -101,9 +98,28 @@ void handle_timer_interrupt() {
     if (timer_list_head != NULL) {
         // 還有任務在排隊，設定為下一個人的時間
         sbi_set_timer(timer_list_head->expire_time);
-    } else {
+    }
+    else {
         // 佇列空了，把硬體計時器設到極遠的未來 (-1ULL 代表 64-bit 的最大值)
         // 這樣直到有新的 add_timer 加入前，都不會再觸發無謂的 Timer 中斷
         sbi_set_timer(-1ULL); 
     }
+}
+
+// 定義原本那個「每 2 秒印一次」的函式
+void print_boot_time(char* arg) {
+    static unsigned long long start_ticks = 0;
+    unsigned long long current_ticks = get_time();
+    if (!start_ticks) 
+        start_ticks = current_ticks;
+    unsigned int seconds = (unsigned int)((current_ticks - start_ticks) / CPU_FREQ);
+    uart_puts("boot time: ");
+    uart_dec(seconds);
+    uart_putc('\n');
+    add_timer(print_boot_time, NULL, 2);
+}
+
+void timeout_callback(char* arg) {
+    uart_puts(arg);
+    uart_putc('\n');
 }

@@ -6,25 +6,22 @@
 #include "mem_alloc.h"
 #include "defint.h"
 #include "timer.h"
+#include "task.h"
 
 // Command length limit
 #define MAX_CMD_LEN 128
 
-// 定義原本那個「每 2 秒印一次」的函式
-void print_boot_time(char* arg) {
-    static int seconds = 0;
-    uart_puts("boot time: ");
-    uart_dec(seconds);
-    uart_putc('\n');
-    seconds += 2;
+void test_task_cb(char *arg) {
+    uart_puts("[Task] Executing Priority ");
+    uart_puts((char*)arg);
+    uart_puts("\n");
 
-    // boot timer
-    add_timer(print_boot_time, NULL, 2);
-}
-
-void timeout_callback(char* arg) {
-    uart_puts(arg);
-    uart_putc('\n');
+    for (volatile int j = 0; j < 100000000; j++) {
+        // do nothing
+    }
+    uart_puts("[Task] Executing Priority ");
+    uart_puts((char*)arg);
+    uart_puts("\n");
 }
 
 void start_kernel_shell(){
@@ -116,6 +113,18 @@ void start_kernel_shell(){
                 add_timer(timeout_callback, msg, sec);
             else 
                 uart_puts("Time setting failed! No message.\n");
+        }
+        else if (strcmp(buffer, "task") == 0){
+            for (int i = 10; i < 30; i++) { // 先測 20 個就好，不然加了延遲會跑很久
+                char prio_str[10];
+                
+                // 簡單的數字轉字串 (因為只有 10~29 兩位數)
+                prio_str[0] = '0' + (i / 10);
+                prio_str[1] = '0' + (i % 10);
+                prio_str[2] = '\0';
+                
+                add_task(test_task_cb, prio_str, i);
+            }
         }
         // unknown command (except type nothing)
         else if (idx != 0){

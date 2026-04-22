@@ -1,4 +1,4 @@
-#define BUF_SIZE 512
+#define BUF_SIZE 2048
 
 typedef struct {
     char buffer[BUF_SIZE];

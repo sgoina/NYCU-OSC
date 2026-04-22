@@ -11,3 +11,7 @@ void timer_init(unsigned long dtb_ptr);
 void add_timer(timer_callback_t cb, char* arg, unsigned long duration_sec);
 
 void handle_timer_interrupt();
+
+void print_boot_time(char* arg);
+
+void timeout_callback(char* arg);
