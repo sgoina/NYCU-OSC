@@ -4,9 +4,13 @@
 unsigned int uart_irq = 0;
 unsigned long plic_base = 0;
 
-#define PLIC_PRIORITY(irq)   (volatile unsigned int*)(plic_base + (irq) * 4) // every interrupt have 4 bytes to save priority
-#define PLIC_ENABLE(hart)    (volatile unsigned int*)(plic_base + 0x002080 + (hart) * 0x0100) // 0x2000 + (2*hart + 1) * 0x80
+// each hart has 2 context (M-mode and S-mode)
+#define PLIC_PRIORITY(irq)   (volatile unsigned int*)(plic_base + (irq) * 4) // every interrupt have 4 bytes to save priority and start from plic_base
+ // 0x2000 + (2*hart + 1) * 0x80, each context has 1K bits for interrupt enables, and start from plic_base + 0x2000
+#define PLIC_ENABLE(hart)    (volatile unsigned int*)(plic_base + 0x002080 + (hart) * 0x0100)
+// each context has 4K bytes for priority threshold and start from plic_base + 0x200000
 #define PLIC_THRESHOLD(hart) (volatile unsigned int*)(plic_base + 0x201000 + (hart) * 0x2000)
+// each context has 4K bytes for Interrupt Claim Process and start from plic_base + 0x200004
 #define PLIC_CLAIM(hart)     (volatile unsigned int*)(plic_base + 0x201004 + (hart) * 0x2000)
 
 extern unsigned long boot_cpu_hartid; // from main.c

@@ -60,24 +60,23 @@ void run_tasks() {
         task_node_t* task = task_head;
         task_head = task_head->next;
         
-        asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
-        
-        // ==========================================
-        // 準備執行任務，保存上下文 (Context Switch)
-        // ==========================================
         // save priority and set new priority,ready to do context switch
         int prev_priority = current_task_priority; 
         current_task_priority = task->priority;    
-
+        asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
+        
         // irq enable for higher interrupt
         asm volatile("csrsi sstatus, 2");
         if (task->callback)
             task->callback(task->args);
         // irq disable
         asm volatile("csrci sstatus, 2");
-
+        
+        // Critical Section
+        asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
         // return previous priority and ready to do context switch
         current_task_priority = prev_priority;
+        asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
         
         free(task);
     }
