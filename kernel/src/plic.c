@@ -4,12 +4,12 @@
 unsigned int uart_irq = 0;
 unsigned long plic_base = 0;
 
-#define PLIC_PRIORITY(irq)   (volatile unsigned int*)(plic_base + (irq) * 4)
-#define PLIC_ENABLE(hart)    (volatile unsigned int*)(plic_base + 0x002080 + (hart) * 0x0100)
+#define PLIC_PRIORITY(irq)   (volatile unsigned int*)(plic_base + (irq) * 4) // every interrupt have 4 bytes to save priority
+#define PLIC_ENABLE(hart)    (volatile unsigned int*)(plic_base + 0x002080 + (hart) * 0x0100) // 0x2000 + (2*hart + 1) * 0x80
 #define PLIC_THRESHOLD(hart) (volatile unsigned int*)(plic_base + 0x201000 + (hart) * 0x2000)
 #define PLIC_CLAIM(hart)     (volatile unsigned int*)(plic_base + 0x201004 + (hart) * 0x2000)
 
-extern unsigned long boot_cpu_hartid;
+extern unsigned long boot_cpu_hartid; // from main.c
 
 void plic_init(unsigned long dtb_ptr) {
     // Find uart interrupt code in device tree
@@ -38,32 +38,32 @@ void plic_init(unsigned long dtb_ptr) {
     }
     else
         return;
-    // 1. 設定 UART 中斷優先級為 1 (大於 0 即可)
+        
+    // Set the priority of UART_IRQ to 1 (greater than 0 to enable it)
     *PLIC_PRIORITY(uart_irq) = 1;
     
-    // 2. 為目前的 Hart 啟用 UART 中斷
-    // ⭐  支援大於 31 的 IRQ
+    // Enable the UART_IRQ for the boot hart
     volatile unsigned int *enable_array = PLIC_ENABLE(boot_cpu_hartid);
-    int word_index = uart_irq / 32;   // 算出在哪個 32-bit 暫存器 (42 / 32 = 1)
-    int bit_offset = uart_irq % 32;   // 算出在該暫存器的第幾個 bit (42 % 32 = 10)
+    // over 32 bits, needs to convert
+    int word_index = uart_irq / 32;
+    int bit_offset = uart_irq % 32;
     enable_array[word_index] |= (1 << bit_offset);
     
-    // 3. 設定閾值為 0 (接受所有優先級 > 0 的中斷)
+    // Set the priority threshold of the boot hart to 0 (accepting all active interrupts).
     *PLIC_THRESHOLD(boot_cpu_hartid) = 0;
     
-    // 4. 開啟 Supervisor External Interrupt (sie.SEIE, bit 9)
+    // The 10th bit of sie => SEIE (Supervisor External Interrupts Enable)
     unsigned long sie;
     asm volatile("csrr %0, sie" : "=r"(sie));
     sie |= (1 << 9);
     asm volatile("csrw sie, %0" : : "r"(sie));
 }
 
+// Get the irq number
 int plic_claim() {
-    // TODO: Implement this function
     return *(volatile unsigned int*)PLIC_CLAIM(boot_cpu_hartid);
 }
-
+// Write irq number back to PLIC CLAIM register to unlock gateway for future interrupt from this source 
 void plic_complete(int irq) {
-    // TODO: Implement this function
     *(volatile unsigned int*)PLIC_CLAIM(boot_cpu_hartid) = irq;
 }

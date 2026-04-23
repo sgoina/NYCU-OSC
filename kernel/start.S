@@ -80,7 +80,7 @@ save_context:
 
 ret_from_exception:
     ld s0,  8 * 32(sp)
-    andi s0, s0, (1 << 8)
+    andi s0, s0, (1 << 8) /* SPP (Supervisor mode Previous Privilege mode) */
     bnez s0, 1f
 
     addi s0, sp, 8 * 35

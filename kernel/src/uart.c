@@ -6,9 +6,9 @@ static unsigned long uart_base_addr = 0;
 
 #define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Receive Buffer Register
 #define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)  // Transmit Holding Register
-#define UART_IER  (volatile unsigned char*)(uart_base_addr + 0x4)
-#define UART_IIR  (volatile unsigned char*)(uart_base_addr + 0x8)
-#define UART_MCR  (volatile unsigned char*)(uart_base_addr + 0x10)
+#define UART_IER  (volatile unsigned char*)(uart_base_addr + 0x4)  // Interrupt Enable Register
+#define UART_IIR  (volatile unsigned char*)(uart_base_addr + 0x8)  // Interrupt Identification Register
+#define UART_MCR  (volatile unsigned char*)(uart_base_addr + 0x10) // Modem Control Register
 #define UART_LSR  (volatile unsigned char*)(uart_base_addr + 0x14) // Line Status Register
 
 #define LSR_DR    (1 << 0) // Data Ready (In Receive Buffer Register)
@@ -30,59 +30,53 @@ void uart_init(unsigned long dtb_ptr) {
     }
     else
         return;
-    // 開啟接收 (RX) 中斷 (bit 0)
-    // 注意：這裡絕對不要開啟 TX 中斷，TX 中斷是由 uart_putc 觸發的
+    // Enable RX Interrupt
     *UART_IER |= (1 << 0);
-    
-    // 啟用 UART 的外部中斷訊號路由 (常見於 8250/16550 晶片)
+    // MCR bit 3 (OUT2) is 1 => UART interrupt is enabled
     *UART_MCR |= (1 << 3);
     return;
 }
-
+// Get a char from UART
 char uart_getc() {
-    // 當 RX Buffer 為空時，休眠等待中斷喚醒，取代 busy-waiting
     while (is_empty(&rx_buf)) {
-        asm volatile("wfi"); 
+        asm volatile("wfi"); // wait for interrupt
     }
     
-    // 進入 Critical Section：關閉中斷，保護 shared buffer
+    // Critical Section
     unsigned long sstatus;
+    // csrrci: read the CSR and clear the specific bit with immediate number
+    // The 2nd bit in sstatus => SIE (enables or disables interrupts)
     asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus)); 
-    
     char c = pop(&rx_buf);
-    
-    // 離開 Critical Section：恢復中斷狀態
+    // csrs : CSR set the specific bits with a variable
+    // return the sstatus
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
     return c;
 }
-
+// Print a char
 void uart_putc(char c) {
-    // 當 TX Buffer 滿時等待
     if (c == '\n') 
         uart_putc('\r'); 
-
-    // 2. 當 TX Buffer 滿時的等待邏輯
+    // When TX buffer is full, waiting
     while (is_full(&tx_buf)) {
         
     }
-
-    // 3. 進入 Critical Section 保護 shared buffer (原本的邏輯)
-    unsigned long sstatus_temp;
-    asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus_temp));
-    
+    // Critical Section
+    unsigned long sstatus;
+    // csrrci: read the CSR and clear the specific bits with an immediate number
+    // The 2nd bit in sstatus => SIE (enables or disables interrupts)
+    asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
     push(&tx_buf, c);
-    
-    // 主動開啟 UART 的 TX Empty Interrupt 點火
+    // Set the 2nd bit in IER => TIE (Transmit Data Request Interrupt Enable)
     *UART_IER |= (1 << 1); 
-    
-    // 恢復原本的中斷狀態
-    asm volatile("csrs sstatus, %0" : : "r"(sstatus_temp & 2));
+    // csrs : CSR set the specific bits with a variable
+    // return the sstatus
+    asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 }
-
+// Print a string
 void uart_puts(const char* s) {
     while (*s) uart_putc(*s++);
 }
-
 // Print hex number by uart
 void uart_hex(unsigned long h) {
     uart_puts("0x");
@@ -93,7 +87,6 @@ void uart_hex(unsigned long h) {
         uart_putc(n);
     }
 }
-
 // Print decimal number by uart
 void uart_dec(unsigned long h) {
     char buf[30];
@@ -110,28 +103,20 @@ void uart_dec(unsigned long h) {
         uart_putc(buf[i]);
     }
 }
-
-// ==========================================
-// 4. UART 中斷處理器 (在 do_trap 內被呼叫)
-// ==========================================
+// Call from do_trap in trap.c
 void handle_uart_interrupt() {
     unsigned char lsr = *UART_LSR;
-
-    // (A) 處理接收 (RX) 中斷
+    // If RX interrupt
     if (lsr & LSR_DR) {
-        char c = *UART_RBR; // 讀取硬體暫存器，清除 RX 中斷狀態
+        char c = *UART_RBR;
         push(&rx_buf, c);
     }
-
-    // (B) 處理發送 (TX) 中斷
+    // If TX interrupt
     if (lsr & LSR_TDRQ) {
-        if (!is_empty(&tx_buf)) {
-            // Buffer 內還有資料，丟給硬體送出
+        // Print if buffer isn't empty
+        if (!is_empty(&tx_buf))
             *UART_THR = pop(&tx_buf);
-        } else {
-            // ⭐【非常重要】：如果 Buffer 已經空了，必須關閉 TX Interrupt
-            // 否則硬體會因為一直處於 "Empty" 狀態而無限觸發中斷，導致系統卡死！
-            *UART_IER &= ~(1 << 1);
-        }
+        else
+            *UART_IER &= ~(1 << 1); // Clear the 2nd bit in IER => TIE (Transmit Data Request Interrupt Enable)
     }
 }

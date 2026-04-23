@@ -1,19 +1,8 @@
-#ifndef __TASK_H__
-#define __TASK_H__
+#define TASK_PRIORITY_TIMER 1
 
-#include "list.h"
+typedef void (*task_callback_t)(void *args);
 
-typedef void (*task_callback_t)(char *arg);
+void add_task(task_callback_t callback, void *args, int priority);
 
-struct task_event {
-    struct list_head list;
-    int priority;
-    task_callback_t callback;
-    void *arg;
-};
-
-void task_init();
-void add_task(task_callback_t callback, char *arg, int priority);
 void run_tasks();
 
-#endif

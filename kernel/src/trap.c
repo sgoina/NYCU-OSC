@@ -5,20 +5,17 @@
 #include "plic.h"
 #include "task.h"
 
-extern int uart_irq;
-extern unsigned int CPU_FREQ;
-extern unsigned int boot_cpu_hartid;
+extern int uart_irq; // from plic.c
 
 void do_trap(struct pt_regs* regs) {
     unsigned long cause = regs->scause;
-    // 判斷是否為 Interrupt (檢查最高位元 bit 63)
+    // The highest bit of scause decides whether it is interrupt
     unsigned long is_interrupt = cause & (1ULL << 63);
-    // 濾掉最高位元，取得實際的中斷/例外代碼
+    // Get the Exception Code
     unsigned long exception_code = cause & ~(1ULL << 63);
 
     if (is_interrupt) {
-        // === 這裡是 Interrupt 的處理區塊 ===
-        if (exception_code == 9) { // 9 代表 SEI (External Interrupt)
+        if (exception_code == 9) { // 9 = Supervisor external interrupt
             int irq = plic_claim();
             
             if (irq == uart_irq) 
@@ -27,14 +24,13 @@ void do_trap(struct pt_regs* regs) {
             if (irq)
                 plic_complete(irq);
         }
-        else if (exception_code == 5) { // 5 代表 Supervisor Timer Interrupt
+        else if (exception_code == 5) { // 5 = Supervisor timer interrupt
             handle_timer_interrupt();
         }
         else {
             uart_puts("Unknown Interrupt!\n");
         }
     }
-    // TODO: Implement this function
     // (1) Print the sepc and scause registers
     else {
         uart_puts("=== S-Mode trap ===\n");
@@ -53,13 +49,12 @@ void do_trap(struct pt_regs* regs) {
         // (2) Increment the sepc register by 4 for traps
         regs->sepc += 4;
     }
-    // 1. 主動打開 CPU 總開關，允許高優先級的硬體中斷插隊 (Nested Trap)！
+    // SIE (enables or disables interrupts) for higher priority tasks
     asm volatile("csrsi sstatus, 2"); 
     
-    // 2. 執行所有耗時的 Task (例如 uart_puts)
+    // execute lower priority tasks
     run_tasks();
     
-    // 3. 執行完畢，準備返回 start.S 恢復 Context 之前，必須再次關閉中斷
-    // (如果不在這裡關閉，start.S 恢復暫存器到一半被打斷會大當機)
+    // disables interrupts to avoid get wrong when context switching
     asm volatile("csrci sstatus, 2");
 }

@@ -6,15 +6,14 @@
 #include "timer.h"
 #include "plic.h"
 
-extern char _start[];
-extern char _end[];
+extern char _start[]; // from start.S
+extern char _end[];   // from start.S
 extern unsigned int CPU_FREQ; // from timer.c
 
 unsigned long boot_cpu_hartid;
 
 void irq_enable(){
-    // 開啟全域中斷 Supervisor Interrupt Enable (sstatus.SIE, bit 1)
-    // (如果你的系統尚未開啟的話，必須設為 1 才能接收硬體中斷)
+    // The 2nd bit of sstatus => SIE (Supervisor Interrupt Enable)
     unsigned long sstatus;
     asm volatile("csrr %0, sstatus" : "=r"(sstatus));
     sstatus |= (1 << 1); 
@@ -24,8 +23,8 @@ void irq_enable(){
 void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     boot_cpu_hartid = hartid;
     
-    uart_init(dtb_ptr);
     plic_init(dtb_ptr);
+    uart_init(dtb_ptr);
     timer_init(dtb_ptr);
     irq_enable();
     

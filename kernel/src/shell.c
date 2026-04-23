@@ -11,7 +11,7 @@
 // Command length limit
 #define MAX_CMD_LEN 128
 
-void test_task_cb(char *arg) {
+void test_task_cb(void *arg) {
     uart_puts("[Task] Executing Priority ");
     uart_puts((char*)arg);
     uart_puts("\n");
@@ -19,9 +19,10 @@ void test_task_cb(char *arg) {
     for (volatile int j = 0; j < 100000000; j++) {
         // do nothing
     }
-    uart_puts("[Task] Executing Priority ");
+    uart_puts("[Task] End Priority ");
     uart_puts((char*)arg);
     uart_puts("\n");
+    free(arg);
 }
 
 void start_kernel_shell(){
@@ -88,9 +89,14 @@ void start_kernel_shell(){
             uart_puts("This command isn't supported. Please add alloc_test() into kernel.\n");
         }
         // command "exec"
-        else if (strcmp(buffer, "exec") == 0){
-            if (exec("prog.bin"))
-                uart_puts("Failed to exec user program!\n");
+        else if (strncmp(buffer, "exec ", 5) == 0){
+            char *f = buffer + 5; // skip "exec "
+            if (*f != '\0') {
+                if (exec(f))
+                    uart_puts("Failed to exec user program!\n");
+            }
+            else
+                uart_puts("Failed to exec user program with no name!\n");
         }
         // command "settimeout"
         else if (strncmp(buffer, "settimeout ", 11) == 0){
@@ -107,23 +113,29 @@ void start_kernel_shell(){
             if (*p != '\0')
                 p++; // skip backspace
             char *msg = p;
-            
-            // 3. 註冊計時器
-            if (*msg != '\0')
-                add_timer(timeout_callback, msg, sec);
+            // timer setting
+            if (*msg != '\0'){
+                int msg_len = 0;
+                while(msg[msg_len] != '\0'){
+                    msg_len++;
+                }
+                char *msg_mm = (char*)allocate(msg_len + 1);
+                
+                for(int i = 0; i <= msg_len; i++) {
+                    msg_mm[i] = msg[i];
+                }
+                add_timer(timeout_callback, (void*)msg_mm, sec);
+            }
             else 
                 uart_puts("Time setting failed! No message.\n");
         }
         else if (strcmp(buffer, "task") == 0){
-            for (int i = 10; i < 30; i++) { // 先測 20 個就好，不然加了延遲會跑很久
-                char prio_str[10];
-                
-                // 簡單的數字轉字串 (因為只有 10~29 兩位數)
+            for (int i = 10; i < 30; i++) {
+                char* prio_str = (char*)allocate(3);
                 prio_str[0] = '0' + (i / 10);
                 prio_str[1] = '0' + (i % 10);
-                prio_str[2] = '\0';
-                
-                add_task(test_task_cb, prio_str, i);
+                prio_str[2] = '\0';  
+                add_task(test_task_cb, (void*)prio_str, i);
             }
         }
         // unknown command (except type nothing)

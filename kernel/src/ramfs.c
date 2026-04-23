@@ -4,8 +4,6 @@
 #include "trap.h"
 #include "mem_alloc.h"
 
-extern void handle_exception(void);
-
 #define STACK_SIZE  0x1000
 static void *cpio_address = 0;
 
@@ -148,51 +146,41 @@ int exec(const char *filename){
         int headsize = align(sizeof(struct cpio_t) + namesize, 4);
         int datasize = align(filesize, 4);
         if (!strncmp(ptr + sizeof(struct cpio_t), filename, namesize)){
-            // 1. 取得原始程式碼在 CPIO 中的位置與大小
+            // the beginning and size of the code
             void* original_code = (void*)(ptr + headsize);
-            
-            // 2. 計算總需要的記憶體大小 (Code + Stack)
             int total_size = filesize + STACK_SIZE;
-            
-            // 【重要】將總大小對齊到 16 bytes，確保未來的 User SP 也是 16-byte 對齊
-            total_size = (total_size + 15) & ~15; 
-
-            // 3. 一次配置一塊「大」記憶體
+            total_size = align(total_size, 16); 
+            // Allocate memory space for the file
             void* user_memory = allocate(total_size); 
             if (!user_memory) {
-                uart_puts("Memory allocation failed!\n");
+                uart_puts("[EXEC]: Memory allocation failed!\n");
                 return -1;
             }
-
-            // 4. 將程式碼從 CPIO 複製到記憶體的「底部」 (低位址)
+            // copy file from CPIO to mem_map
             char *src = (char *)original_code;
             char *dst = (char *)user_memory;
             for (int i = 0; i < filesize; i++) {
                 dst[i] = src[i];
             }
 
-            // 5. 設定進入點 (Entry Point) 為剛配置的記憶體起始位址
-            void* entry_point = user_memory;
-            
-            // 6. 設定 User Stack
-            // Stack 由高位址往低位址生長，所以指標要指到這塊大記憶體的「最頂部」
-            unsigned long user_sp = (unsigned long)user_memory + total_size;
+            void* entry_point = user_memory; // the beginning of the process
+            unsigned long user_sp = (unsigned long)user_memory + total_size; // User stack of the process
 
-            // 7. 設定 sstatus 準備進入 User Mode
             unsigned long sstatus;
+            // csrr: Read CSR
             asm volatile("csrr %0, sstatus" : "=r"(sstatus));
-            sstatus &= ~(1 << 8); // 清除 SPP，設定 Previous Privilege 為 0 (User Mode)
-            sstatus |= (1 << 5);  // 設定 SPIE，允許 U-mode 發生中斷
+            // setting U-Mode and enable interrupt
+            sstatus &= ~(1 << 8); // SPP (Supervisor mode Previous Privilege mode): 1=Supervisor, 0=User
+            sstatus |= (1 << 5);  // SPIE (Supervisor Previous Interrupt Enable)
+            // csrw: Write CSR
             asm volatile("csrw sstatus, %0" : : "r"(sstatus));
-            
-            // 8. 將進入點寫入 sepc
+            // write sepc to the beginning of the process
             asm volatile("csrw sepc, %0" : : "r"(entry_point));
-
-            // 9. 備份 Kernel SP、切換 User SP 並進入 User Mode
+            // Go to U-Mode
             asm volatile(
-                "csrw sscratch, sp\n\t" // 備份 Kernel SP
-                "mv sp, %0\n\t"         // 切換成剛算好的 User SP
-                "sret\n\t"              // 降級並跳轉
+                "csrw sscratch, sp\n\t" // backup kernel stack, sscratch (Supervisor Scratch Register)
+                "mv sp, %0\n\t"         // switch to User stack
+                "sret\n\t"              // return from S-Mode and go back to User process
                 : 
                 : "r"(user_sp)
             );
@@ -200,5 +188,6 @@ int exec(const char *filename){
         }
         ptr += headsize + datasize;
     }
+    uart_puts("Can't find the file in CPIO to execute!\n");
     return -1;
 }

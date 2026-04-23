@@ -6,8 +6,12 @@ typedef struct {
     volatile int tail;
 } RingBuffer;
 
-static inline int is_empty(RingBuffer *rb) { return rb->head == rb->tail; }
-static inline int is_full(RingBuffer *rb)  { return ((rb->tail + 1) % BUF_SIZE) == rb->head; }
+static inline int is_empty(RingBuffer *rb){
+    return rb->head == rb->tail;
+}
+static inline int is_full(RingBuffer *rb){
+    return ((rb->tail + 1) % BUF_SIZE) == rb->head;
+}
 
 static inline void push(RingBuffer *rb, char c) {
     if (!is_full(rb)) {

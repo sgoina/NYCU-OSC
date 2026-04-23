@@ -74,6 +74,5 @@ long sbi_get_impl_version(void){
 }
 
 void sbi_set_timer(unsigned long stime_value) {
-    // 傳入 extension id, function id, 以及 target_time (arg0)
     sbi_ecall(SBI_EXT_TIME, SBI_FID_SET_TIMER, stime_value, 0, 0, 0, 0, 0);
 }
