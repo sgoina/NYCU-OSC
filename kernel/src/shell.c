@@ -7,22 +7,30 @@
 #include "defint.h"
 #include "timer.h"
 #include "task.h"
+#include "thread.h"
 
 // Command length limit
 #define MAX_CMD_LEN 128
 
-void test_task_cb(void *arg) {
-    uart_puts("[Task] Executing Priority ");
-    uart_puts((char*)arg);
-    uart_puts("\n");
-
-    for (volatile int j = 0; j < 100000000; j++) {
-        // do nothing
+void idle() {
+    while (1) {
+        kill_zombies();
+        schedule();
     }
-    uart_puts("[Task] End Priority ");
-    uart_puts((char*)arg);
-    uart_puts("\n");
-    free(arg);
+}
+
+void foo() {
+    for (int i = 0; i < 5; i++) {
+        uart_puts("Process ID: ");
+        uart_hex(get_current()->pid);
+        uart_puts(" ");
+        uart_hex(i);
+        uart_puts("\n");
+        for (int j = 0; j < 100000000; j++)
+            ;
+        schedule();
+    }
+    thread_exit(); 
 }
 
 void start_kernel_shell(){
@@ -30,7 +38,7 @@ void start_kernel_shell(){
     int idx;
     char c;
     uart_puts("OrangePi-RV2> ");
-    add_timer(print_boot_time, NULL, 0);
+    //add_timer(print_boot_time, NULL, 0);
     while (1) {
         idx = 0;
         buffer[idx] = '\0';
@@ -130,13 +138,11 @@ void start_kernel_shell(){
                 uart_puts("Time setting failed! No message.\n");
         }
         else if (strcmp(buffer, "task") == 0){
-            for (int i = 10; i < 30; i++) {
-                char* prio_str = (char*)allocate(3);
-                prio_str[0] = '0' + (i / 10);
-                prio_str[1] = '0' + (i % 10);
-                prio_str[2] = '\0';  
-                add_task(test_task_cb, (void*)prio_str, i);
+            asm volatile("move tp, %0" : : "r"(thread_create(idle)));
+            for (int i = 0; i < 3; i++) {
+                thread_create(foo);
             }
+            idle();
         }
         // unknown command (except type nothing)
         else if (idx != 0){
