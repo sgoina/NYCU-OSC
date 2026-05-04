@@ -12,27 +12,6 @@
 // Command length limit
 #define MAX_CMD_LEN 128
 
-void idle() {
-    while (1) {
-        kill_zombies();
-        schedule();
-    }
-}
-
-void foo() {
-    for (int i = 0; i < 5; i++) {
-        uart_puts("Process ID: ");
-        uart_hex(get_current()->pid);
-        uart_puts(" ");
-        uart_hex(i);
-        uart_puts("\n");
-        for (int j = 0; j < 100000000; j++)
-            ;
-        schedule();
-    }
-    thread_exit(); 
-}
-
 void start_kernel_shell(){
     char buffer[MAX_CMD_LEN];
     int idx;
@@ -100,8 +79,14 @@ void start_kernel_shell(){
         else if (strncmp(buffer, "exec ", 5) == 0){
             char *f = buffer + 5; // skip "exec "
             if (*f != '\0') {
-                if (exec(f))
-                    uart_puts("Failed to exec user program!\n");
+                void* entry_point = find_program(f);
+                if (entry_point != 0) {
+                    struct task_struct* child_task = user_process_create((void (*)())entry_point);
+                    // wait user process
+                    while (child_task->state != TASK_ZOMBIE) {
+                        schedule(); 
+                    }
+                }
             }
             else
                 uart_puts("Failed to exec user program with no name!\n");
@@ -138,11 +123,11 @@ void start_kernel_shell(){
                 uart_puts("Time setting failed! No message.\n");
         }
         else if (strcmp(buffer, "task") == 0){
-            asm volatile("move tp, %0" : : "r"(thread_create(idle)));
+            /*asm volatile("move tp, %0" : : "r"(thread_create(idle)));
             for (int i = 0; i < 3; i++) {
                 thread_create(foo);
             }
-            idle();
+            idle();*/
         }
         // unknown command (except type nothing)
         else if (idx != 0){

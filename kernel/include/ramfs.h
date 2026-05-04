@@ -22,3 +22,5 @@ void ls_filenames();
 void cat_file_content(const char* filename);
 
 int exec(const char *filename);
+
+void* find_program(const char *filename);

@@ -77,7 +77,8 @@ save_context:
     csrw sscratch, zero
     move a0, sp
     call do_trap
-
+    
+.global ret_from_exception
 ret_from_exception:
     ld s0,  8 * 32(sp)
     andi s0, s0, (1 << 8) /* SPP (Supervisor mode Previous Privilege mode) */

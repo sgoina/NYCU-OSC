@@ -191,3 +191,21 @@ int exec(const char *filename){
     uart_puts("Can't find the file in CPIO to execute!\n");
     return -1;
 }
+
+void* find_program(const char *filename) {
+    char *ptr = (char *)cpio_address;
+    while (strncmp(ptr + sizeof(struct cpio_t), "TRAILER!!!", 10)) {
+        struct cpio_t* hdr = (struct cpio_t*)ptr;
+        int namesize = hextoi(hdr->namesize, 8);
+        int filesize = hextoi(hdr->filesize, 8);
+        int headsize = align(sizeof(struct cpio_t) + namesize, 4);
+        int datasize = align(filesize, 4);
+        if (!strncmp(ptr + sizeof(struct cpio_t), filename, namesize)) {
+            void* entry_point = (void*)(ptr + headsize);
+            return entry_point; 
+        }
+        ptr += headsize + datasize;
+    }
+    uart_puts("Can't find the file in CPIO to execute!\n");
+    return 0; 
+}

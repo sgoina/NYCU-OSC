@@ -1,7 +1,7 @@
 struct pt_regs {
-    // 通用暫存器 (Offset: 0 ~ 30)
+    // General Register (Offset: 0 ~ 30)
     unsigned long ra;     // 8 * 0
-    unsigned long sp;     // 8 * 1  (從 sscratch 讀取的 User SP)
+    unsigned long sp;     // 8 * 1 User SP
     unsigned long gp;     // 8 * 2
     unsigned long tp;     // 8 * 3
     unsigned long t0;     // 8 * 4
@@ -32,7 +32,7 @@ struct pt_regs {
     unsigned long t5;     // 8 * 29
     unsigned long t6;     // 8 * 30
 
-    // 控制與狀態暫存器 (Offset: 31 ~ 34)
+    // CSR (Offset: 31 ~ 34)
     unsigned long sepc;   // 8 * 31
     unsigned long sstatus;// 8 * 32
     unsigned long scause; // 8 * 33

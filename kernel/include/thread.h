@@ -1,5 +1,6 @@
 #define TASK_RUNNING 0
 #define TASK_ZOMBIE  1
+struct pt_regs;
 
 struct task_struct {
     struct thread_struct {
@@ -18,7 +19,10 @@ struct task_struct {
 struct task_struct* get_current();
 void schedule();
 struct task_struct* thread_create(void (*threadfn)());
+struct task_struct* user_process_create(void (*entry)());
+long fork_process(struct pt_regs *regs);
 void thread_exit();
 void kill_zombies();
 void init_thread_queue();
 void idle();
+void foo();
