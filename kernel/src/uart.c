@@ -1,6 +1,7 @@
 #include "uart.h"
 #include "deviceTree.h"
 #include "ring_buffer.h"
+#include "thread.h"
 
 static unsigned long uart_base_addr = 0;
 
@@ -39,7 +40,7 @@ void uart_init(unsigned long dtb_ptr) {
 // Get a char from UART
 char uart_getc() {
     while (is_empty(&rx_buf)) {
-        asm volatile("wfi"); // wait for interrupt
+        schedule();
     }
     
     // Critical Section

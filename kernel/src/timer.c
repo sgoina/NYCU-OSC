@@ -4,9 +4,9 @@
 #include "sbi.h"
 #include "mem_alloc.h"
 #include "task.h"
+#include "thread.h"
 
 unsigned int CPU_FREQ = 0;
-
 
 typedef struct timer_node {
     unsigned long expire_time; // trigger time
@@ -66,26 +66,36 @@ void add_timer(timer_callback_t cb, void* args, unsigned long duration_sec) {
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 }
 
+#define SCHED_TICK (CPU_FREQ / 32)
+
 void handle_timer_interrupt() {
     unsigned long current_time = get_time();
 
-    // Check all the time in timer list
+    // 1. 處理你原本超棒的 Timer List (軟體計時器)
     while (timer_list_head != NULL && timer_list_head->expire_time <= current_time) {
         timer_node_t* expired_node = timer_list_head;
         timer_list_head = timer_list_head->next; 
 
-        // execute the function
+        // 執行 Callback
         add_task(expired_node->callback, expired_node->args, TASK_PRIORITY_TIMER);
-
         free(expired_node); 
     }
 
-    // Reset the timer for next timer node
-    if (timer_list_head != NULL) 
+    // 2. 🌟 關鍵修改：強制設定下一次中斷為 1/32 秒後 🌟
+    // 這裡我們不再依賴 timer_list_head 來設定硬體 timer，
+    // 而是強制讓系統擁有固定的「心跳」，保證排程器一定會被喚醒！
+    unsigned long next_tick = get_time() + SCHED_TICK;
+    
+    // (可選進階寫法) 如果 Timer List 裡面有比 1/32 秒更早到期的任務，就提早醒來
+    if (timer_list_head != NULL && timer_list_head->expire_time < next_tick) {
         sbi_set_timer(timer_list_head->expire_time);
-    // If there is no timer node, set a infinity number for timer not to trigger interrupt 
-    else 
-        sbi_set_timer(-1ULL); 
+    } else {
+        sbi_set_timer(next_tick);
+    }
+
+    // 3. 🌟 作業的核心要求：強制作業切換 🌟
+    // 只要時間一到，管你 User Program 跑得多開心，直接拔掉它的 CPU 控制權！
+    schedule();
 }
 
 // boot timer

@@ -73,7 +73,9 @@ struct task_struct* user_process_create(void (*entry)()){
     struct pt_regs* regs = (struct pt_regs*)(task->kernel_sp - sizeof(struct pt_regs));
     
     // Init
-    for (int i = 0; i < sizeof(struct pt_regs) / 8; i++) ((unsigned long*)regs)[i] = 0;
+    for (int i = 0; i < sizeof(struct pt_regs) / 8; i++){
+        ((unsigned long*)regs)[i] = 0;
+    }
 
     // Trap Frame
     regs->tp = (unsigned long)task;
@@ -88,7 +90,7 @@ struct task_struct* user_process_create(void (*entry)()){
 
     // Context (for switch_to)
     task->thread.ra = (unsigned long)ret_from_exception;
-    task->thread.sp = (unsigned long)regs;             
+    task->thread.sp = (unsigned long)regs;
 
     enqueue(&run_queue, task);
     return task;

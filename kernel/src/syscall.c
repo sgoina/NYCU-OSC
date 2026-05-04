@@ -1,9 +1,12 @@
 #include "trap.h"
 #include "thread.h"
+#include "timer.h"
 #include "ramfs.h"
 #include "uart.h"
+#include "video.h"
 
 extern struct task_struct* run_queue;
+extern unsigned int CPU_FREQ;
 
 // 0: getpid
 long sys_getpid() {
@@ -130,6 +133,22 @@ int sys_stop(long pid) {
     return -1; 
 }
 
+void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height){
+    video_bmp_display(bmp_image, width, height);
+}
+
+// 實作 Syscall 9: usleep
+int sys_usleep(unsigned int usec) {
+    unsigned long long ticks = (unsigned long long)usec * (CPU_FREQ / 1000000);
+    unsigned long long start_time = get_time();
+
+    while ((get_time() - start_time) < ticks) {
+        schedule(); // 關鍵：讓出 CPU！
+    }
+    
+    return 0;
+}
+
 // System Call 派發中心
 void syscall_handler(struct pt_regs *regs) {
     // 直接透過欄位名稱取得 syscall number (a7)
@@ -170,6 +189,17 @@ void syscall_handler(struct pt_regs *regs) {
         case 7: // stop
             // 強制將特定 PID 設為 ZOMBIE
             ret = sys_stop(regs->a0);
+            break;
+            
+        case 8: // display
+            // a0 = bmp_image, a1 = width, a2 = height
+            sys_display((unsigned int*)regs->a0, (unsigned int)regs->a1, (unsigned int)regs->a2);
+            ret = 0; // void 回傳值不重要，預設給 0
+            break;
+            
+        case 9: // usleep
+            // a0 = usec
+            ret = sys_usleep((unsigned int)regs->a0);
             break;
             
         default:
