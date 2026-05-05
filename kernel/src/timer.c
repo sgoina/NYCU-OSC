@@ -6,7 +6,9 @@
 #include "task.h"
 #include "thread.h"
 
-unsigned int CPU_FREQ = 0;
+unsigned long CPU_FREQ = 0;
+#define SCHED_TICK (CPU_FREQ / 32)
+extern struct task_struct* run_queue;
 
 typedef struct timer_node {
     unsigned long expire_time; // trigger time
@@ -17,6 +19,15 @@ typedef struct timer_node {
 
 timer_node_t* timer_list_head = NULL;
 
+void set_next_timer() {
+    /*unsigned long next_time = get_time() + SCHED_TICK;
+    uart_puts("This is heartbeat ");
+    uart_hex(next_time);
+    uart_putc('\n');*/
+    add_timer(set_next_timer, NULL, SCHED_TICK);
+    schedule();
+}
+
 void timer_init(unsigned long dtb_ptr) {
     // Get CPU frequency rate from device tree
     int cpus_offset = fdt_path_offset(dtb_ptr, "/cpus");
@@ -26,22 +37,23 @@ void timer_init(unsigned long dtb_ptr) {
         CPU_FREQ = bswap32(*(const unsigned int*)prop);    
     else 
         return;
-
-    // The 6th bit of sie => STIE (Supervisor Timer Interrupts Enable)
+    
     unsigned long sie;
     asm volatile("csrr %0, sie" : "=r"(sie));
-    sie |= (1 << 5); 
+    sie |= (1 << 5); // 開啟 STIE (Supervisor Timer Interrupt Enable)
     asm volatile("csrw sie, %0" : : "r"(sie));
+    // 🌟 最初的推力：設定開機後的第一次鬧鐘
+    add_timer(set_next_timer, NULL, SCHED_TICK);
 }
 
-void add_timer(timer_callback_t cb, void* args, unsigned long duration_sec) {
+void add_timer(timer_callback_t cb, void* args, unsigned long duration_ticks) {
     // allocate memory space for new timer node
     timer_node_t* new_node = (timer_node_t*)allocate(sizeof(timer_node_t));
     
     // Set the timer node
     new_node->callback = cb;
     new_node->args = args;
-    new_node->expire_time = get_time() + (duration_sec * CPU_FREQ);
+    new_node->expire_time = get_time() + duration_ticks;
     new_node->next = NULL;
 
     // Critical Section
@@ -66,36 +78,32 @@ void add_timer(timer_callback_t cb, void* args, unsigned long duration_sec) {
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 }
 
-#define SCHED_TICK (CPU_FREQ / 32)
-
 void handle_timer_interrupt() {
     unsigned long current_time = get_time();
+    
+    // Critical Section
+    unsigned long sstatus;
+    asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
+    
 
-    // 1. 處理你原本超棒的 Timer List (軟體計時器)
+    // Check all the time in timer list
     while (timer_list_head != NULL && timer_list_head->expire_time <= current_time) {
         timer_node_t* expired_node = timer_list_head;
         timer_list_head = timer_list_head->next; 
 
-        // 執行 Callback
+        // execute the function
         add_task(expired_node->callback, expired_node->args, TASK_PRIORITY_TIMER);
+
         free(expired_node); 
     }
+    asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 
-    // 2. 🌟 關鍵修改：強制設定下一次中斷為 1/32 秒後 🌟
-    // 這裡我們不再依賴 timer_list_head 來設定硬體 timer，
-    // 而是強制讓系統擁有固定的「心跳」，保證排程器一定會被喚醒！
-    unsigned long next_tick = get_time() + SCHED_TICK;
-    
-    // (可選進階寫法) 如果 Timer List 裡面有比 1/32 秒更早到期的任務，就提早醒來
-    if (timer_list_head != NULL && timer_list_head->expire_time < next_tick) {
+    // Reset the timer for next timer node
+    if (timer_list_head != NULL) 
         sbi_set_timer(timer_list_head->expire_time);
-    } else {
-        sbi_set_timer(next_tick);
-    }
-
-    // 3. 🌟 作業的核心要求：強制作業切換 🌟
-    // 只要時間一到，管你 User Program 跑得多開心，直接拔掉它的 CPU 控制權！
-    schedule();
+    // If there is no timer node, set a infinity number for timer not to trigger interrupt 
+    else 
+        sbi_set_timer(-1ULL); 
 }
 
 // boot timer

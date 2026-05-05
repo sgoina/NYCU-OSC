@@ -1,6 +1,7 @@
 #include "defint.h"
 #include "thread.h"
 #include "trap.h"
+#include "timer.h"
 #include "mem_alloc.h"
 #include "uart.h"
 
@@ -13,6 +14,11 @@ int nr_threads = 0;
 
 static void enqueue(struct task_struct** queue, struct task_struct* task) {
     task->state = TASK_RUNNING; // 初始化狀態
+    
+    // Critical Section
+    unsigned long sstatus;
+    asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
+    
     if (*queue == 0) {
         *queue = task;
         task->next = task;
@@ -26,6 +32,8 @@ static void enqueue(struct task_struct** queue, struct task_struct* task) {
         tail->next = task;
         task->next = *queue;
     }
+    
+    asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 }
 
 struct task_struct* get_current() {
@@ -38,15 +46,21 @@ void schedule() {
     // TODO: Implement this function
     struct task_struct* prev = get_current();
     struct task_struct* next = prev->next;
-
+    
+    // Critical Section
+    unsigned long sstatus;
+    asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
+    
     // 跳過已經變成 ZOMBIE 的任務
     while (next->state == TASK_ZOMBIE && next != prev) {
         next = next->next;
     }
-
+    
     if (prev != next) {
         switch_to(prev, next);
     }
+    
+    asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 }
 
 struct task_struct* thread_create(void (*threadfn)()) {
