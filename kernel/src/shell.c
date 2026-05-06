@@ -83,9 +83,7 @@ void start_kernel_shell(){
                 if (entry_point != 0) {
                     struct task_struct* child_task = user_process_create((void (*)())entry_point);
                     // wait user process
-                    while (child_task->state != TASK_ZOMBIE) {
-                        schedule(); 
-                    }
+                    thread_wait(child_task->pid);
                 }
             }
             else
@@ -123,11 +121,11 @@ void start_kernel_shell(){
                 uart_puts("Time setting failed! No message.\n");
         }
         else if (strcmp(buffer, "task") == 0){
-            /*asm volatile("move tp, %0" : : "r"(thread_create(idle)));
+            thread_create(idle);
             for (int i = 0; i < 3; i++) {
                 thread_create(foo);
             }
-            idle();*/
+            //idle(); // Comment for shell can do after testing.
         }
         // unknown command (except type nothing)
         else if (idx != 0){

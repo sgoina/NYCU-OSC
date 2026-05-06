@@ -19,15 +19,6 @@ typedef struct timer_node {
 
 timer_node_t* timer_list_head = NULL;
 
-void set_next_timer() {
-    /*unsigned long next_time = get_time() + SCHED_TICK;
-    uart_puts("This is heartbeat ");
-    uart_hex(next_time);
-    uart_putc('\n');*/
-    add_timer(set_next_timer, NULL, SCHED_TICK);
-    schedule();
-}
-
 void timer_init(unsigned long dtb_ptr) {
     // Get CPU frequency rate from device tree
     int cpus_offset = fdt_path_offset(dtb_ptr, "/cpus");
@@ -43,7 +34,7 @@ void timer_init(unsigned long dtb_ptr) {
     sie |= (1 << 5); // 開啟 STIE (Supervisor Timer Interrupt Enable)
     asm volatile("csrw sie, %0" : : "r"(sie));
     // 🌟 最初的推力：設定開機後的第一次鬧鐘
-    add_timer(set_next_timer, NULL, SCHED_TICK);
+    sbi_set_timer(get_time() + SCHED_TICK);
 }
 
 void add_timer(timer_callback_t cb, void* args, unsigned long duration_ticks) {
@@ -98,12 +89,17 @@ void handle_timer_interrupt() {
     }
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
 
-    // Reset the timer for next timer node
-    if (timer_list_head != NULL) 
+    // 🌟 改變點 2：計算下一次中斷時間 (Heartbeat 或是更早的自訂 Timer)
+    unsigned long next_heartbeat = current_time + SCHED_TICK;
+    if (timer_list_head != NULL && timer_list_head->expire_time < next_heartbeat) {
         sbi_set_timer(timer_list_head->expire_time);
-    // If there is no timer node, set a infinity number for timer not to trigger interrupt 
-    else 
-        sbi_set_timer(-1ULL); 
+    }
+    else {
+        sbi_set_timer(next_heartbeat); // 確保 Heartbeat 永遠在跳動
+    }
+
+    // 🌟 改變點 3：在 Timer 處理完畢後，直接呼叫 schedule() 進行搶占
+    schedule();
 }
 
 // boot timer

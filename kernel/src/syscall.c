@@ -1,9 +1,12 @@
+#include "mem_alloc.h"
 #include "trap.h"
 #include "thread.h"
 #include "timer.h"
 #include "ramfs.h"
 #include "uart.h"
 #include "video.h"
+
+#define STACK_SIZE 0x1000
 
 extern struct task_struct* run_queue;
 extern unsigned int CPU_FREQ;
@@ -17,24 +20,20 @@ long sys_getpid() {
 long sys_uart_read(char *buf, long count) {
     long read_bytes = 0;
     for (long i = 0; i < count; i++) {
-        // 這裡假設 uart_getc 是一個會阻塞 (blocking) 等待字元的函式
         buf[i] = uart_getc();
         read_bytes++;
-        // 簡單的 Enter 處理，視你的終端機行為可微調
-        if (buf[i] == '\r' || buf[i] == '\n')
-            break; 
     }
     return read_bytes;
 }
 
 // 2: uart_write
 long sys_uart_write(const char *buf, long count) {
-    long written = 0;
+    long written_bytes = 0;
     for (long i = 0; i < count; i++) {
         uart_putc(buf[i]);
-        written++;
+        written_bytes++;
     }
-    return written;
+    return written_bytes;
 }
 
 // 3: exec
@@ -51,7 +50,7 @@ long sys_exec(const char *path, struct pt_regs *regs) {
     regs->sepc = (unsigned long)entry_point;
 
     // 3. 重設 User Stack (把指標指回最高位址，相當於清空 Stack)
-    regs->sp = current->user_sp;
+    regs->sp = current->user_sp + STACK_SIZE;
 
     // 4. 清理 a0 暫存器 (可選，避免把舊程式的資料洩漏給新程式)
     regs->a0 = 0;
@@ -67,68 +66,41 @@ long sys_fork(struct pt_regs *regs) {
 
 // 5: waitpid
 long sys_waitpid(long pid) {
-    while (1) {
-        int found = 0;
-        int is_zombie = 0;
-
-        struct task_struct *curr = run_queue;
-        struct task_struct *entry = run_queue;
-        
-        if (!curr) return -1;
-
-        // 走訪 Queue 尋找指定的子行程
-        do {
-            if (curr->pid == pid) {
-                found = 1;
-                if (curr->state == TASK_ZOMBIE) {
-                    is_zombie = 1;
-                }
-                break;
-            }
-            curr = curr->next;
-        } while (curr != entry);
-
-        // 如果找不到該 PID，或是該 PID 已經變成 ZOMBIE 了，就結束等待
-        // (在進階的 OS 中，這裡應該要把 ZOMBIE 從 Queue 移除並釋放記憶體)
-        if (!found || is_zombie) {
-            return pid;
-        }
-
-        // 行程還活著，父行程主動交出 CPU 繼續等
-        schedule();
-    }
+    return thread_wait(pid);
 }
 
 // 6: exit
 void sys_exit(int status) {
-    struct task_struct* current = get_current();
-    current->state = TASK_ZOMBIE; // 標記為殭屍行程
-    // status 可以存在 task_struct 裡供 waitpid 讀取，Lab 5 不強制
-    
-    schedule(); // 交出 CPU
-    while(1);   // 防呆
+    thread_exit();
 }
 
 // 7: stop
 int sys_stop(long pid) {
-    // 防呆：不能終止自己 (不然誰來回傳結果？)，也不能終止不存在的 run_queue
-    if (pid == get_current()->pid || run_queue == 0) {
-        return -1; 
+    if (pid <= 1) {
+        uart_puts("Can't stop idle or kernel shell thread.\n");
+        return -1;
     }
 
     struct task_struct *curr = run_queue;
     struct task_struct *entry_node = run_queue;
-
+    int found = 0;
+    
     // 走訪 Queue 尋找目標 PID
     do {
         if (curr->pid == pid) {
             // 找到目標，將其標記為 ZOMBIE
             curr->state = TASK_ZOMBIE;
-            return 0; // 成功
+            found = 1;
+            break;
         }
         curr = curr->next;
     } while (curr != entry_node);
-
+    
+    if (found){
+        if (pid == get_current()->pid)
+            thread_exit();
+        return 0;
+    }
     // 找不到對應的 PID
     return -1; 
 }
@@ -139,6 +111,8 @@ void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int heigh
 
 // 實作 Syscall 9: usleep
 int sys_usleep(unsigned int usec) {
+    if (usec < 0)
+        return -1;
     unsigned long long ticks = (unsigned long long)usec * (CPU_FREQ / 1000000);
     unsigned long long start_time = get_time();
 
@@ -146,6 +120,56 @@ int sys_usleep(unsigned int usec) {
         schedule(); // 關鍵：讓出 CPU！
     }
     
+    return 0;
+}
+
+// 10: signal (註冊信號處理器)
+long sys_signal(int sig, unsigned long handler) {
+    // 檢查信號代碼是否合法
+    if (sig < 0 || sig >= MAX_SIGNALS) return -1;
+    
+    struct task_struct *curr = get_current();
+    curr->signal_handlers[sig] = handler;
+    return 0;
+}
+
+// 11: sigreturn (從信號處理器返回)
+void sys_sigreturn(struct pt_regs *regs) {
+    struct task_struct *curr = get_current();
+    
+    // ==========================================================
+    // 🌟 Advanced Part: 回收臨時的 Signal Stack
+    // ==========================================================
+    if (curr->signal_stack != 0) {
+        // 呼叫 free 將剛才 allocate 的 4KB 記憶體還給系統
+        free((void *)curr->signal_stack);
+        
+        // 🚨 極度重要：釋放後一定要把指標歸零！
+        // 避免下次沒發信號時，系統誤以為這裡還有記憶體可以 free (Double Free)
+        curr->signal_stack = 0; 
+    }
+
+    // 1. 從 signal_saved_context 把暫存器全部「倒回」目前的 pt_regs 中
+    char *src = (char *)&curr->signal_saved_context;
+    char *dst = (char *)regs;
+    for (int i = 0; i < sizeof(struct pt_regs); i++) {
+        dst[i] = src[i];
+    }
+    // 2. 解除處理中的狀態，允許接收下一個信號
+    curr->is_handling_signal = 0;
+    uart_puts("This is sigreturn\n");
+}
+
+// 12: kill (發送信號給指定行程)
+int sys_kill(int pid, int sig) {
+    if (sig < 0 || sig >= MAX_SIGNALS)
+        return -1;
+    
+    struct task_struct *target = get_task_by_pid(pid);
+    if (!target)
+        return -1; // 找不到該行程
+    // 把對應的 bit 設為 1 (打上標記)
+    target->pending_signals |= (1ULL << sig);
     return 0;
 }
 
@@ -200,6 +224,19 @@ void syscall_handler(struct pt_regs *regs) {
         case 9: // usleep
             // a0 = usec
             ret = sys_usleep((unsigned int)regs->a0);
+            break;
+            
+        case 10: 
+            ret = sys_signal((int)regs->a0, regs->a1); 
+            break;
+                        
+        case 11: 
+            // 🚨 終極地雷防禦：sigreturn 還原了暫存器，必須立刻離開！
+            sys_sigreturn(regs);
+            return;
+            
+        case 12: 
+            ret = sys_kill((int)regs->a0, (int)regs->a1); 
             break;
             
         default:

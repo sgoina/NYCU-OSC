@@ -1,5 +1,3 @@
-#include "string.h"
-
 #define FB_BASE   0x7f700000
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080

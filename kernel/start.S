@@ -163,3 +163,16 @@ switch_to:
     /* 更新 tp 暫存器為 next task_struct 的位址 */
     mv tp, a1
     ret
+    
+.global sigreturn_trampoline_start
+.global sigreturn_trampoline_end
+
+# 🌟 注意：我們把它放在 .rodata (唯讀資料區)
+# 因為 Kernel 本身不會去執行它，而是把它當成「字串資料」複製給 User Stack
+.section .rodata
+
+sigreturn_trampoline_start:
+    # 根據你的設定，sys_sigreturn 是 11 號
+    li a7, 11       
+    ecall           
+sigreturn_trampoline_end:

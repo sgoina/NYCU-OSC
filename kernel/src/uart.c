@@ -40,6 +40,7 @@ void uart_init(unsigned long dtb_ptr) {
 // Get a char from UART
 char uart_getc() {
     while (is_empty(&rx_buf)) {
+        //asm volatile("wfi");
         schedule();
     }
     

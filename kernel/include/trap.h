@@ -1,3 +1,6 @@
+#ifndef TRAP_H
+#define TRAP_H
+
 struct pt_regs {
     // General Register (Offset: 0 ~ 30)
     unsigned long ra;     // 8 * 0
@@ -40,3 +43,5 @@ struct pt_regs {
 };
 
 void do_trap(struct pt_regs* regs);
+
+#endif
