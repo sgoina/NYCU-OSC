@@ -39,10 +39,9 @@ void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     
     init_mem(dtb_ptr);    
     
+    // Set Thread Pointer
     asm volatile("move tp, %0" : : "r"(thread_create(idle)));
-    timer_init(dtb_ptr);
+    timer_init(dtb_ptr); // Open timer interrupt (include heartbeat timer)
     thread_create(start_kernel_shell);
     idle();
-    
-    //start_kernel_shell();
 }

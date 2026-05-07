@@ -7,7 +7,7 @@
 #include "thread.h"
 #include "syscall.h"
 
-extern int uart_irq; // from plic.c
+extern int uart_irq; // plic.c
 
 void do_trap(struct pt_regs* regs) {
     unsigned long cause = regs->scause;
@@ -35,17 +35,9 @@ void do_trap(struct pt_regs* regs) {
     }
     // (1) Print the sepc and scause registers
     else {
-        // 🌟 修正：同時處理 User Mode (8) 和 Kernel Mode (9) 的系統呼叫！
-        if (exception_code == 8 || exception_code == 9) {
-            
-            // 🚨 必須將 sepc 推進 4 byte，否則返回後會無限執行 ecall
-            regs->sepc += 4;
-            
-            // 🚨 移除了危險的 csrsi/csrci，防止巢狀中斷引發 S-Mode Trap 崩潰
-            
-            // 派發系統呼叫
+        if (exception_code == 8) {
+            regs->sepc += 4; // Increment the sepc register by 4 avoid to infinity loop
             syscall_handler(regs);
-            
         }
         else {
             uart_puts("=== S-Mode trap ===\n");
@@ -73,11 +65,6 @@ void do_trap(struct pt_regs* regs) {
     
     // disables interrupts to avoid get wrong when context switching
     asm volatile("csrci sstatus, 2");
-    // ====================================================================
-    // 🌟 Advanced Part: 魔法發生的瞬間！
-    // 就在完成所有 Trap 處理、準備執行 sret 回到 User Mode 之前：
-    // 檢查有沒有被發送信號。如果有，這個函數會把 regs->sepc 偷偷改成 
-    // handler 的位址，並備份原本的狀態！
-    // ====================================================================
-    thread_handle_signals(regs);
+    // check there is any signal need to handle
+    thread_handle_signals(regs); 
 }

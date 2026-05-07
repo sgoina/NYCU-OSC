@@ -127,8 +127,7 @@ ret_from_exception:
     
 .global switch_to
 switch_to:
-    // TODO: Implement this function
-    /* 儲存 prev 的狀態 (a0 指向 prev task_struct) */
+    /* save prev task_struct (a0) */
     sd ra,   0(a0)
     sd sp,   8(a0)
     sd s0,  16(a0)
@@ -144,7 +143,7 @@ switch_to:
     sd s10, 96(a0)
     sd s11, 104(a0)
 
-    /* 載入 next 的狀態 (a1 指向 next task_struct) */
+    /* load next task_struct (a1) */
     ld ra,   0(a1)
     ld sp,   8(a1)
     ld s0,  16(a1)
@@ -160,19 +159,14 @@ switch_to:
     ld s10, 96(a1)
     ld s11, 104(a1)
 
-    /* 更新 tp 暫存器為 next task_struct 的位址 */
     mv tp, a1
     ret
     
 .global sigreturn_trampoline_start
 .global sigreturn_trampoline_end
 
-# 🌟 注意：我們把它放在 .rodata (唯讀資料區)
-# 因為 Kernel 本身不會去執行它，而是把它當成「字串資料」複製給 User Stack
-.section .rodata
-
+.section .rodata /* read only data because this section need to copy to signal stack */
 sigreturn_trampoline_start:
-    # 根據你的設定，sys_sigreturn 是 11 號
-    li a7, 11       
+    li a7, 11 /* system call 11 = sigreturn */
     ecall           
 sigreturn_trampoline_end:

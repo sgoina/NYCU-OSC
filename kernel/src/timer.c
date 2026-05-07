@@ -18,6 +18,7 @@ typedef struct timer_node {
 } timer_node_t;
 
 timer_node_t* timer_list_head = NULL;
+static unsigned long next_heartbeat = 0; // heartbeat timer
 
 void timer_init(unsigned long dtb_ptr) {
     // Get CPU frequency rate from device tree
@@ -31,10 +32,10 @@ void timer_init(unsigned long dtb_ptr) {
     
     unsigned long sie;
     asm volatile("csrr %0, sie" : "=r"(sie));
-    sie |= (1 << 5); // 開啟 STIE (Supervisor Timer Interrupt Enable)
+    sie |= (1 << 5); // STIE (Supervisor Timer Interrupt Enable)
     asm volatile("csrw sie, %0" : : "r"(sie));
-    // 🌟 最初的推力：設定開機後的第一次鬧鐘
-    sbi_set_timer(get_time() + SCHED_TICK);
+
+    sbi_set_timer(get_time() + SCHED_TICK); // heartbeat timer start to work
 }
 
 void add_timer(timer_callback_t cb, void* args, unsigned long duration_ticks) {
@@ -72,11 +73,12 @@ void add_timer(timer_callback_t cb, void* args, unsigned long duration_ticks) {
 void handle_timer_interrupt() {
     unsigned long current_time = get_time();
     
+    if (next_heartbeat == 0)
+        next_heartbeat = current_time + SCHED_TICK;
+    
     // Critical Section
     unsigned long sstatus;
     asm volatile("csrrci %0, sstatus, 2" : "=r"(sstatus));
-    
-
     // Check all the time in timer list
     while (timer_list_head != NULL && timer_list_head->expire_time <= current_time) {
         timer_node_t* expired_node = timer_list_head;
@@ -88,18 +90,25 @@ void handle_timer_interrupt() {
         free(expired_node); 
     }
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
+    
+    // check whether over heartbeat time
+    int is_heartbeat = 0;
+    if (current_time >= next_heartbeat) {
+        is_heartbeat = 1;
+        while (next_heartbeat <= current_time) {
+            next_heartbeat += SCHED_TICK;
+        }
+    }
 
-    // 🌟 改變點 2：計算下一次中斷時間 (Heartbeat 或是更早的自訂 Timer)
-    unsigned long next_heartbeat = current_time + SCHED_TICK;
-    if (timer_list_head != NULL && timer_list_head->expire_time < next_heartbeat) {
+    // determine next timer interrupt
+    if (timer_list_head != NULL && timer_list_head->expire_time < next_heartbeat)
         sbi_set_timer(timer_list_head->expire_time);
-    }
-    else {
-        sbi_set_timer(next_heartbeat); // 確保 Heartbeat 永遠在跳動
-    }
+    else
+        sbi_set_timer(next_heartbeat);
 
-    // 🌟 改變點 3：在 Timer 處理完畢後，直接呼叫 schedule() 進行搶占
-    schedule();
+    // over heartbeat time => schedule() (per 1/32 second)
+    if (is_heartbeat)
+        schedule();
 }
 
 // boot timer
@@ -112,7 +121,7 @@ void print_boot_time(void* arg) {
     uart_puts("boot time: ");
     uart_dec(seconds);
     uart_putc('\n');
-    add_timer(print_boot_time, NULL, 2);
+    add_timer(print_boot_time, NULL, 2 * CPU_FREQ);
 }
 
 // command "settimeout"

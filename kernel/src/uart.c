@@ -41,7 +41,7 @@ void uart_init(unsigned long dtb_ptr) {
 char uart_getc() {
     while (is_empty(&rx_buf)) {
         //asm volatile("wfi");
-        schedule();
+        schedule(); // avoid stock
     }
     
     // Critical Section

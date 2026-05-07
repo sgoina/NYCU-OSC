@@ -192,6 +192,7 @@ int exec(const char *filename){
     return -1;
 }
 
+// find the program entry
 void* find_program(const char *filename) {
     char *ptr = (char *)cpio_address;
     while (strncmp(ptr + sizeof(struct cpio_t), "TRAILER!!!", 10)) {

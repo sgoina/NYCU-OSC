@@ -8,7 +8,7 @@ static inline unsigned long long get_time() {
 
 void timer_init(unsigned long dtb_ptr);
 
-void add_timer(timer_callback_t cb, void* args, unsigned long duration_sec);
+void add_timer(timer_callback_t cb, void* args, unsigned long duration_ticks);
 
 void handle_timer_interrupt();
 
