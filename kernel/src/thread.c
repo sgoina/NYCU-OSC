@@ -293,6 +293,7 @@ void thread_handle_signals(struct pt_regs *regs) {
             unsigned long tramp_size = sigreturn_trampoline_end - sigreturn_trampoline_start;
             
             new_sp -= tramp_size;
+            new_sp &= ~0xF; // align to 16 bytes
 
             char *user_tramp_space = (char *)new_sp;
             for (int i = 0; i < tramp_size; i++) {
