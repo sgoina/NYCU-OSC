@@ -2,7 +2,8 @@ OUTPUT_ARCH(riscv)
 ENTRY(_start)
 SECTIONS
 {
-    . = 0x00200000;
+    . = 0xffffffc000000000;
+    . += 0x00200000;
     _start = .;
     _load_start = .;
     .text : { *(.text.boot) *(.text) }

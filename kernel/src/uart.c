@@ -2,6 +2,7 @@
 #include "deviceTree.h"
 #include "ring_buffer.h"
 #include "thread.h"
+#include "vm.h"
 
 static unsigned long uart_base_addr = 0;
 
@@ -26,8 +27,10 @@ void uart_init(unsigned long dtb_ptr) {
     const void* prop = fdt_getprop(dtb_ptr, uart_base_offset, "reg", &len); // find the base address of uart
     if (prop != NULL){
         const uint32_t* reg = (const uint32_t*)prop;    
-        uint32_t uart_reg = bswap32(reg[1]);
-        uart_base_addr = uart_reg;
+        uint64_t base_high = bswap32(reg[0]);
+        uint64_t base_low  = bswap32(reg[1]);
+        uart_base_addr = (base_high << 32) | base_low;
+        uart_base_addr += PAGE_OFFSET;
     }
     else
         return;

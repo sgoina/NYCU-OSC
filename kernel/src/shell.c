@@ -12,6 +12,8 @@
 // Command length limit
 #define MAX_CMD_LEN 128
 
+extern unsigned long CPU_FREQ; // from timer.c
+
 void start_kernel_shell(){
     char buffer[MAX_CMD_LEN];
     int idx;
@@ -115,7 +117,7 @@ void start_kernel_shell(){
                 for(int i = 0; i <= msg_len; i++) {
                     msg_mm[i] = msg[i];
                 }
-                add_timer(timeout_callback, (void*)msg_mm, sec);
+                add_timer(timeout_callback, (void*)msg_mm, sec * CPU_FREQ);
             }
             else 
                 uart_puts("Time setting failed! No message.\n");

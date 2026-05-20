@@ -7,6 +7,7 @@
 #include "timer.h"
 #include "thread.h"
 #include "plic.h"
+#include "vm.h"
 
 extern char _start[]; // from start.S
 extern char _end[];   // from start.S
@@ -24,6 +25,7 @@ void irq_enable(){
 }
 
 void start_main(unsigned long hartid, unsigned long dtb_ptr) {
+    dtb_ptr += PAGE_OFFSET;
     boot_cpu_hartid = hartid;
     boot_dtb_ptr = dtb_ptr;
     
@@ -32,12 +34,13 @@ void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     irq_enable();
     
     uart_puts("New Kernel! New Kernel! New Kernel! New Kernel!\n");
+    
     if (initrd_addr(dtb_ptr) != -1)
         uart_puts("File system initialization is successful!\n");
     else
         uart_puts("Can't initialize file system!\n");
     
-    init_mem(dtb_ptr);    
+    init_mem(dtb_ptr);  
     
     // Set Thread Pointer
     asm volatile("move tp, %0" : : "r"(thread_create(idle)));

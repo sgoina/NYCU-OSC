@@ -1,5 +1,6 @@
 #include "plic.h"
 #include "deviceTree.h"
+#include "vm.h"
 
 unsigned int uart_irq = 0;
 unsigned long plic_base = 0;
@@ -37,8 +38,10 @@ void plic_init(unsigned long dtb_ptr) {
     prop = fdt_getprop(dtb_ptr, plic_offset, "reg", &len);
     if (prop != NULL){
         const uint32_t* reg = (const uint32_t*)prop;    
-        uint32_t plic_reg = bswap32(reg[1]);
-        plic_base = plic_reg;
+        uint64_t base_high = bswap32(reg[0]);
+        uint64_t base_low  = bswap32(reg[1]);
+        plic_base = (base_high << 32) | base_low;
+        plic_base += PAGE_OFFSET;
     }
     else
         return;

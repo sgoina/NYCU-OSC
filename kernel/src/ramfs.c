@@ -3,6 +3,7 @@
 #include "uart.h"
 #include "trap.h"
 #include "mem_alloc.h"
+#include "vm.h"
 
 #define STACK_SIZE  0x1000
 static void *cpio_address = 0;
@@ -43,13 +44,17 @@ int initrd_addr(unsigned long dtb_ptr){
         int len = 0;
         uint32_t* rd_start = (uint32_t*)fdt_getprop(dtb_ptr, rd_base_offset, "linux,initrd-start", &len); // use offset to find starting address of cpio
         if(rd_start){
+            unsigned long cpio_pa = 0;
             if (len == 4) {
-                cpio_address = (void*)(unsigned long)bswap32(*rd_start);
-            } else if (len == 8) {
+                cpio_pa = bswap32(*rd_start);
+            }
+            else if (len == 8) {
                 uint64_t high = bswap32(rd_start[0]);
                 uint64_t low = bswap32(rd_start[1]);
-                cpio_address = (void*)(unsigned long)((high << 32) | low);
+                cpio_pa = (high << 32) | low;
             }
+            // 算好實體位址後，加上 PAGE_OFFSET 轉為虛擬位址，再存入指標
+            cpio_address = (void *)(cpio_pa + PAGE_OFFSET);
         }
     }
     else
