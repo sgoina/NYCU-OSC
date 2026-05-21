@@ -1,3 +1,6 @@
+#include "utils.h"
+#include "video.h"
+
 #define FB_BASE   0x7f700000
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080
@@ -14,16 +17,6 @@
                      : "memory", "a0"); \
     })
 
-void *memcpy(void *dest, const void *src, unsigned long n) {
-    char *d = (char *)dest;
-    const char *s = (const char *)src;
-    
-    while (n--) {
-        *d++ = *s++;
-    }
-    
-    return dest;
-}
 
 // 刷 Cache 邏輯 (完全保留)
 static void flush_dcache(void* addr, unsigned long len) {

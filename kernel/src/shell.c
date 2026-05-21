@@ -8,6 +8,7 @@
 #include "timer.h"
 #include "task.h"
 #include "thread.h"
+#include "vm.h"
 
 // Command length limit
 #define MAX_CMD_LEN 128
@@ -81,14 +82,30 @@ void start_kernel_shell(){
         else if (strncmp(buffer, "exec ", 5) == 0){
             char *f = buffer + 5; // skip "exec "
             if (*f != '\0') {
-                void* entry_point = find_program(f);
-                if (entry_point != 0) {
-                    struct task_struct* child_task = user_process_create((void (*)())entry_point);
-                    // wait user process
-                    thread_wait(child_task->pid);
+                unsigned int filesize = 0;
+    
+                // 呼叫新版的 find_program，傳入 &filesize 來接收大小
+                void* prog_va = find_program(f, &filesize);
+                
+                if (prog_va != NULL) { 
+                    // 💡 關鍵點：kernel_code_addr 是 Kernel 讀取 CPIO 檔案的虛擬位址
+                    // 在傳入 user_process_create 給 map_pages 使用前，必須轉為物理位址 (PA)
+                    void* prog_pa = (void*)((unsigned long)prog_va - PAGE_OFFSET);
+                    
+                    // 呼叫新版的 user_process_create
+                    struct task_struct* child_task = user_process_create(filesize, prog_pa);
+                    
+                    if (child_task != NULL) {
+                        // wait user process
+                        thread_wait(child_task->pid);
+                    }
+                    else
+                        uart_puts("Failed to create user process!\n");
                 }
+                else
+                    uart_puts("Failed to exec: Program not found!\n");
             }
-            else
+            else 
                 uart_puts("Failed to exec user program with no name!\n");
         }
         // command "settimeout"

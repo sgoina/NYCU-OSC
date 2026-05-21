@@ -64,7 +64,9 @@ void uart_putc(char c) {
         uart_putc('\r'); 
     // When TX buffer is full, waiting
     while (is_full(&tx_buf)) {
-        
+       if (*UART_LSR & LSR_TDRQ) {
+            *UART_THR = pop(&tx_buf);
+        }
     }
     // Critical Section
     unsigned long sstatus;

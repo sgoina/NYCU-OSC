@@ -23,4 +23,4 @@ void cat_file_content(const char* filename);
 
 int exec(const char *filename);
 
-void* find_program(const char *filename);
+void* find_program(const char *filename, unsigned int *filesize_out);

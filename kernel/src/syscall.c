@@ -5,9 +5,12 @@
 #include "timer.h"
 #include "ramfs.h"
 #include "uart.h"
+#include "utils.h"
 #include "video.h"
+#include "vm.h"
 
 #define STACK_SIZE 0x1000
+#define align(size, align_val) (((size) + (align_val) - 1) & ~((align_val) - 1))
 
 extern struct task_struct* run_queue; // thread.c
 extern unsigned int CPU_FREQ; // timer.c
@@ -39,6 +42,62 @@ long sys_uart_write(const char *buf, long count) {
 
 // 3: exec
 long sys_exec(const char *path, struct pt_regs *regs) {
+    unsigned int filesize = 0;
+    
+    // 1. 取得新程式的 Kernel 虛擬位址與大小
+    void* kernel_code_addr = find_program(path, &filesize);
+    if (kernel_code_addr == NULL) {
+        return -1; // Can't find
+    }
+
+    struct task_struct *current = get_current();
+
+    // 2. 打造新的記憶體宇宙 (分配新 PGD 與新 Stack)
+    unsigned long *new_pgd = (unsigned long *)allocate(PAGE_SIZE);
+    memset(new_pgd, 0, PAGE_SIZE);
+    unsigned long new_stack = (unsigned long)allocate(STACK_SIZE);
+
+    // 3. 實體位址轉換 (供 map_pages 寫入 PTE 使用)
+    unsigned long code_pa = (unsigned long)kernel_code_addr - PAGE_OFFSET;
+    unsigned long stack_pa = (unsigned long)new_stack - PAGE_OFFSET;
+
+    // 4. 映射 Code 與 Stack 到固定的 User 虛擬位址
+    map_pages(new_pgd, USER_CODE_VA, align(filesize, PAGE_SIZE), code_pa, PROT_USER_RX);
+    map_pages(new_pgd, USER_STACK_VA - STACK_SIZE, STACK_SIZE, stack_pa, PROT_USER_RW);
+
+    // 5. 清理舊的記憶體 (避免 Memory Leak)
+    if (current->pgd != NULL) {
+        // TODO: 嚴謹的做法應該要寫一個 free_page_table 函數來釋放舊 PGD 內的所有 PTE/PMD 頁面
+        free(current->pgd);
+    }
+    if (current->user_stack != 0) {
+        free((void*)current->user_stack);
+    }
+
+    // 6. 更新 TCB (Task Control Block) 資訊
+    current->pgd = new_pgd;
+    current->user_stack = new_stack;
+    current->user_sp = USER_STACK_VA;
+
+    // 7. 更新 Exception Return 狀態 (綁死 User 虛擬位址)
+    regs->sepc = USER_CODE_VA;
+    regs->sp = USER_STACK_VA;
+
+    // 8. 立即切換硬體 MMU！
+    // 因為這個 System Call 結束後，CPU 會執行 sret 返回 User Mode，
+    // 所以我們必須在這裡就把 satp 切換到新的 PGD，否則 sret 回去會踩到舊的記憶體空間。
+    unsigned long pgd_pa = (unsigned long)new_pgd - PAGE_OFFSET;
+    unsigned long satp_val = (8UL << 60) | (pgd_pa >> 12);
+    asm volatile(
+        "csrw satp, %0\n\t"
+        "sfence.vma zero, zero\n\t"
+        : : "r"(satp_val)
+    );
+
+    return 0;
+}
+/*
+long sys_exec(const char *path, struct pt_regs *regs) {
     // find the program entry
     void* entry_point = find_program(path);
     if (entry_point == 0) {
@@ -53,6 +112,7 @@ long sys_exec(const char *path, struct pt_regs *regs) {
 
     return 0;
 }
+*/
 
 // 4: fork
 long sys_fork(struct pt_regs *regs) {

@@ -39,8 +39,7 @@ void start_main(unsigned long hartid, unsigned long dtb_ptr) {
         uart_puts("File system initialization is successful!\n");
     else
         uart_puts("Can't initialize file system!\n");
-    
-    init_mem(dtb_ptr);  
+    init_mem(dtb_ptr);
     
     // Set Thread Pointer
     asm volatile("move tp, %0" : : "r"(thread_create(idle)));

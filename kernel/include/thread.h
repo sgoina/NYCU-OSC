@@ -27,15 +27,18 @@ struct task_struct {
     int is_handling_signal;// Is Handling Signal (boolean)
     unsigned long signal_handlers[MAX_SIGNALS]; // signal handlers, find by signal num
     struct pt_regs signal_saved_context; // regs backup, sigreturn will return back to original regs 
-    
-    
+    // 👇 [新增] Virtual Memory 的專屬欄位：指向該 Process 的 Page Table
+    unsigned long *pgd;
+    // 👇 [新增] 紀錄程式碼的實體位址與大小，供 fork 使用
+    void* code_frame;
+    unsigned int code_size;
 };
 
 struct task_struct* get_current();
 struct task_struct* get_task_by_pid(int pid);
 void schedule();
 struct task_struct* thread_create(void (*threadfn)());
-struct task_struct* user_process_create(void (*entry)());
+struct task_struct* user_process_create(unsigned long filesize, void* physical_code);
 long fork_process(struct pt_regs *regs);
 long thread_wait(long pid);
 void thread_exit();

@@ -21,7 +21,6 @@ struct reserved_region {
 static struct reserved_region early_reserved[MAX_RESERVED_REGIONS]; //record all reserved regions
 static int num_early_reserved = 0; // the number of reserved regions
 
-#define PAGE_SIZE 4096 // 1 page size = 4KB
 #define MAX_ORDER 10 // 2^10 = 1024 pages (4MB)
 #define NUM_POOLS 6 // the number of options in Dynamic Memory Allocator
 const int pool_sizes[NUM_POOLS] = {16, 32, 64, 128, 256, 512};
