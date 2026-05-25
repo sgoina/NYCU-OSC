@@ -38,7 +38,7 @@ struct task_struct* get_current();
 struct task_struct* get_task_by_pid(int pid);
 void schedule();
 struct task_struct* thread_create(void (*threadfn)());
-struct task_struct* user_process_create(unsigned long filesize, void* physical_code);
+struct task_struct* user_process_create(unsigned long filesize, void* prog_va);
 long fork_process(struct pt_regs *regs);
 long thread_wait(long pid);
 void thread_exit();

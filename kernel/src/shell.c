@@ -88,12 +88,8 @@ void start_kernel_shell(){
                 void* prog_va = find_program(f, &filesize);
                 
                 if (prog_va != NULL) { 
-                    // 💡 關鍵點：kernel_code_addr 是 Kernel 讀取 CPIO 檔案的虛擬位址
-                    // 在傳入 user_process_create 給 map_pages 使用前，必須轉為物理位址 (PA)
-                    void* prog_pa = (void*)((unsigned long)prog_va - PAGE_OFFSET);
-                    
                     // 呼叫新版的 user_process_create
-                    struct task_struct* child_task = user_process_create(filesize, prog_pa);
+                    struct task_struct* child_task = user_process_create(filesize, prog_va);
                     
                     if (child_task != NULL) {
                         // wait user process

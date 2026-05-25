@@ -1,7 +1,9 @@
 #define PAGE_OFFSET   0xffffffc000000000UL
 
-#define USER_CODE_VA  0x0000000000000000
-#define USER_STACK_VA 0x0000003ffffff000
+#define USER_CODE_VA  0x0000000000000000UL
+#define USER_STACK_VA 0x0000003ffffff000UL
+#define USER_SP_VA    0x0000004000000000UL
+#define USER_SIG_STACK_VA 0x0000003ffff00000UL
 
 /* Memory map */
 #define PAGE_SIZE     (1UL << 12) 
@@ -34,6 +36,7 @@
 #define PROT_USER_BASE (PTE_V | PTE_U | PTE_A | PTE_D)
 #define PROT_USER_RX   (PROT_USER_BASE | PTE_R | PTE_X)
 #define PROT_USER_RW   (PROT_USER_BASE | PTE_R | PTE_W)
+#define PROT_USER_RWX  (PROT_USER_BASE | PTE_R | PTE_W | PTE_X)
 
 #define SATP_SV39           (8UL << 60)
 #define MAKE_SATP(pgd_pa)   (SATP_SV39 | ((unsigned long)(pgd_pa) >> 12))

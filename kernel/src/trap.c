@@ -40,11 +40,7 @@ void do_trap(struct pt_regs* regs) {
             syscall_handler(regs);
         }
         else {
-            uart_puts("=== S-Mode trap ===\n");
-            uart_puts("Trap regs->sp: ");
-            uart_hex(regs->sp);
-            uart_puts("\n");
-            
+            uart_puts("=== S-Mode trap ===\n");    
             uart_puts("scause: ");
             uart_hex(regs->scause);
             uart_puts("\n");

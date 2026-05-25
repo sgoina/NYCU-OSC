@@ -83,36 +83,17 @@ void schedule() {
     // jump to next thread
     if (prev != next) {
         // --- 👇 [新增] Virtual Memory 切換邏輯 ---
-        // 1. 如果 next 是 User Process (擁有自己的 PGD)
-        if (next->pgd != NULL) {
-            // 將虛擬位址轉換為實體位址
-            unsigned long pgd_pa = (unsigned long)next->pgd - PAGE_OFFSET;
-            
-            // 寫入 satp 並刷新 TLB
-            asm volatile(
-                "sfence.vma zero, zero\n"
-                "csrw satp, %0\n"
-                "sfence.vma zero, zero\n"
-                :
-                : "r"(MAKE_SATP(pgd_pa))
-                : "memory"
-            );
-        } 
-        // 2. 如果 next 是 Kernel Thread (沒有自己的 PGD，共用 Kernel PGD)
-        else {
-            unsigned long pgd_pa = (unsigned long)pgd - PAGE_OFFSET;
-            
-            // 寫入 satp 並刷新 TLB
-            asm volatile(
-                "sfence.vma zero, zero\n"
-                "csrw satp, %0\n"
-                "sfence.vma zero, zero\n"
-                :
-                : "r"(MAKE_SATP(pgd_pa))
-                : "memory"
-            );
-        }
-        // --- 👆 [新增] Virtual Memory 切換邏輯結束 ---
+        // 將虛擬位址轉換為實體位址
+        unsigned long pgd_pa = (unsigned long)next->pgd - PAGE_OFFSET;
+        
+        // 寫入 satp 並刷新 TLB
+        asm volatile(
+            "csrw satp, %0\n"
+            "sfence.vma zero, zero\n"
+            :
+            : "r"(MAKE_SATP(pgd_pa))
+            : "memory"
+        );
     
         switch_to(prev, next);
     }
@@ -152,7 +133,11 @@ struct task_struct* thread_create(void (*threadfn)()) {
     task->kernel_sp = task->kernel_stack + STACK_SIZE;
     task->user_stack = 0; // because this thread is kernel thread
     task->thread.sp = task->kernel_sp;
-    task->pgd = NULL; // for kernel thread
+    task->pgd = pgd; // for kernel thread
+    
+    // 👇 新增：Kernel Thread 沒有專屬的 User Code 空間
+    task->code_frame = 0;
+    task->code_size = 0;
     
     // initialize signal-related info
     task->signal_stack = 0;
@@ -167,7 +152,7 @@ struct task_struct* thread_create(void (*threadfn)()) {
 }
 
 // Create user thread
-struct task_struct* user_process_create(unsigned long filesize, void* program_pa) {
+struct task_struct* user_process_create(unsigned long filesize, void* program_va) {
     struct task_struct* task = allocate(sizeof(struct task_struct));
     if (!task){
         uart_puts("User thread allocation failed.\n");
@@ -204,21 +189,36 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_pa
 
     // 2. 分配實體 Stack
     task->user_stack = (unsigned long)allocate(STACK_SIZE);
-    task->user_sp = USER_STACK_VA; // 虛擬位址固定！
+    task->user_sp = USER_SP_VA; // 虛擬位址固定！
 
     // 3. 映射 Code 與 Stack 到專屬 PGD
     // 必須將 allocate 回傳的 VA 轉為 PA 才能存入 Page Table
     unsigned long stack_pa = (unsigned long)task->user_stack - PAGE_OFFSET;
     
-    // ✅ 關鍵修正：確認 program_pa 是否為虛擬位址，若是，必須扣除 PAGE_OFFSET
-    // 假設從 find_program 拿到的是 Kernel VA:
-    unsigned long code_pa = (unsigned long)program_pa;
-    if (code_pa >= PAGE_OFFSET) {
-        code_pa -= PAGE_OFFSET;
+    // ✅ 關鍵修正：分配新的實體記憶體給 User Program
+    unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
+    void* user_code_ptr = allocate(aligned_filesize); // 分配 4KB 對齊的記憶體
+    if (!user_code_ptr) {
+        uart_puts("User code allocation failed.\n");
+        return NULL;
     }
+
+    // 清空這塊記憶體 (這對 .bss 段非常重要，確保未初始化的全域變數為 0)
+    memset(user_code_ptr, 0, aligned_filesize);
+
+    // 將程式碼內容複製進來 
+    // (前提：program_pa 必須是 Kernel 可以直接存取的 Virtual Address)
+    memcpy(user_code_ptr, program_va, filesize);
     
-    map_pages(task->pgd, USER_CODE_VA, align(filesize, PAGE_SIZE), code_pa, PROT_USER_RX);
-    map_pages(task->pgd, USER_STACK_VA - STACK_SIZE, STACK_SIZE, stack_pa, PROT_USER_RW);
+    // 👇 新增：把這塊分配出來的記憶體位址和大小記錄在 TCB 中，讓 fork 可以用！
+    task->code_frame = user_code_ptr;
+    task->code_size = aligned_filesize;
+    
+    // 從 find_program 拿到的是 Kernel VA:
+    unsigned long code_pa = (unsigned long)user_code_ptr - PAGE_OFFSET;
+    
+    map_pages(task->pgd, USER_CODE_VA, aligned_filesize, code_pa, PROT_USER_RX);
+    map_pages(task->pgd, USER_STACK_VA, STACK_SIZE, stack_pa, PROT_USER_RW);
 
     // --- 👆 Virtual Memory 核心新增邏輯結束 ---
 
@@ -232,7 +232,7 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_pa
     
     // 💡 關鍵改變：sepc 和 sp 綁死在固定的虛擬位址！
     regs->sepc = USER_CODE_VA;             
-    regs->sp = task->user_sp;
+    regs->sp = USER_SP_VA;
     //regs->sepc = (unsigned long)entry;      // user process entry
     //regs->sp = task->user_sp;               // user stack
     
@@ -265,16 +265,6 @@ long fork_process(struct pt_regs *regs) {
     child->kernel_stack = (unsigned long)allocate(STACK_SIZE); 
     child->kernel_sp = child->kernel_stack + STACK_SIZE;
     
-    child->user_stack = (unsigned long)allocate(STACK_SIZE);
-    child->user_sp = child->user_stack + STACK_SIZE;
-    
-    // Copy user stack of parent thread
-    char *src_user_stack = (char *)parent->user_stack;
-    char *dst_user_stack = (char *)child->user_stack;
-    for (int i = 0; i < STACK_SIZE; i++) {
-        dst_user_stack[i] = src_user_stack[i];
-    }
-    
     child->pending_signals = 0;
     child->is_handling_signal = 0;
     child->signal_stack = 0;
@@ -293,25 +283,41 @@ long fork_process(struct pt_regs *regs) {
         dst_regs[i] = src_regs[i];
     }
     
-    // 1. 為 Child 分配全新的 PGD
+    // --- 👇 Virtual Memory 宇宙複製開始 👇 ---
+
+    // 3. 為 Child 分配全新的 PGD
     child->pgd = (unsigned long*)allocate(PAGE_SIZE);
     memset(child->pgd, 0, PAGE_SIZE);
 
-    // 2. 複製 Stack 實體記憶體 (你原本寫的，保留！)
+    // 🌟 關鍵修正：複製 Kernel 的高位址映射 (絕對不能漏！)
+    for (int i = 256; i < 512; i++) {
+        child->pgd[i] = pgd[i];
+    }
+
+    // 4. 分配並複製 User Stack 實體記憶體
     child->user_stack = (unsigned long)allocate(STACK_SIZE);
     memcpy((void*)child->user_stack, (void*)parent->user_stack, STACK_SIZE);
+    child->user_sp = parent->user_sp; // 虛擬位址與 Parent 完全相同
 
-    // 3. 【新增】複製 Code 實體記憶體！
-    // 💡 提示：為了讓 fork 知道要複製多大的 Code，你可能需要在 task_struct 裡新增 code_size 和 code_frame_addr 欄位。
+    // 5. 分配並複製 User Code 實體記憶體
+    // ⚠️ 依賴警告：你的 parent task_struct 必須要有 code_size 和 code_frame 這兩個數值！
     child->code_frame = allocate(parent->code_size);
+    if (!child->code_frame){
+        uart_puts("Allocate user code failed!\n");
+        return -1;
+    }
     memcpy((void*)child->code_frame, (void*)parent->code_frame, parent->code_size);
+    child->code_size = parent->code_size;
 
-    // 4. 【新增】將複製好的 Code 和 Stack 映射到 Child 的 PGD 中
+    // 6. 計算實體位址並寫入 Child 的 Page Table
     unsigned long child_code_pa = (unsigned long)child->code_frame - PAGE_OFFSET;
-    unsigned long child_stack_pa = (unsigned long)child->user_stack - PAGE_OFFSET;
+    unsigned long child_stack_pa = child->user_stack - PAGE_OFFSET;
     
-    map_pages(child->pgd, USER_CODE_VA, parent->code_size, child_code_pa, PROT_USER_RX);
-    map_pages(child->pgd, USER_STACK_VA - STACK_SIZE, STACK_SIZE, child_stack_pa, PROT_USER_RW);
+    // ✅ 關鍵修正：與 create/exec 保持一致的虛擬位址範圍與權限
+    map_pages(child->pgd, USER_CODE_VA, child->code_size, child_code_pa, PROT_USER_BASE | PTE_R | PTE_W | PTE_X);
+    map_pages(child->pgd, USER_STACK_VA, STACK_SIZE, child_stack_pa, PROT_USER_RW);
+
+    // --- 👆 Virtual Memory 宇宙複製結束 👆 ---
 
     // Return value 0 for child thread
     child_regs->a0 = 0;
@@ -387,20 +393,29 @@ void thread_handle_signals(struct pt_regs *regs) {
 
             // Initialize signal stack
             curr->signal_stack = (unsigned long)allocate(STACK_SIZE);
-            unsigned long new_sp = curr->signal_stack + STACK_SIZE; 
+            // 🌟 關鍵修正 1：將分配到的實體記憶體映射到 User 虛擬位址
+            unsigned long sig_stack_pa = curr->signal_stack - PAGE_OFFSET;
+            // 注意：必須加上 PTE_X，因為我們要讓 User 執行放在 Stack 裡的 Trampoline Code！
+            map_pages(curr->pgd, USER_SIG_STACK_VA, STACK_SIZE, sig_stack_pa, PROT_USER_RWX);
+            
+            unsigned long kernel_sp = curr->signal_stack + STACK_SIZE; 
+            unsigned long user_sp = USER_SIG_STACK_VA + STACK_SIZE; 
+            
             // Put trampoline code into signal stack
             unsigned long tramp_size = sigreturn_trampoline_end - sigreturn_trampoline_start;
             
-            new_sp -= tramp_size;
-            new_sp &= ~0xF; // align to 16 bytes
+            kernel_sp -= tramp_size;
+            kernel_sp &= ~0xF; // align to 16 bytes
+            user_sp -= tramp_size;
+            user_sp &= ~0xF;
 
-            char *user_tramp_space = (char *)new_sp;
+            char *user_tramp_space = (char *)kernel_sp;
             for (int i = 0; i < tramp_size; i++) {
                 user_tramp_space[i] = sigreturn_trampoline_start[i];
             }
 
-            regs->ra = new_sp; // set return address to trampoline function 
-            regs->sp = new_sp; // set stack pointer to signal stack pointer
+            regs->ra = user_sp; // set return address to trampoline function 
+            regs->sp = user_sp; // set stack pointer to signal stack pointer
             regs->sepc = handler; // Go to signal handler function
         }
         else {

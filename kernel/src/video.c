@@ -1,7 +1,9 @@
 #include "utils.h"
 #include "video.h"
+#include "vm.h"
 
-#define FB_BASE   0x7f700000
+#define FB_BASE_PA  0x7f700000
+#define FB_BASE_VA  (FB_BASE_PA + PAGE_OFFSET)
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080
 #define CACHE_BLOCK_SIZE 64
@@ -30,7 +32,7 @@ static void flush_dcache(void* addr, unsigned long len) {
 
 // show image on framebuffer
 void video_bmp_display(unsigned int* bmp_image, int width, int height) {
-    unsigned int* fb = (unsigned int*)FB_BASE;
+    unsigned int* fb = (unsigned int*)FB_BASE_VA;
     // Center alignment
     int start_x = (FB_WIDTH - width) / 2;
     int start_y = (FB_HEIGHT - height) / 2;

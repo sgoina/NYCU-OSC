@@ -14,6 +14,8 @@
 
 extern struct task_struct* run_queue; // thread.c
 extern unsigned int CPU_FREQ; // timer.c
+extern unsigned long pgd[]; // vm.c
+
 
 // 0: getpid
 long sys_getpid() {
@@ -44,54 +46,79 @@ long sys_uart_write(const char *buf, long count) {
 long sys_exec(const char *path, struct pt_regs *regs) {
     unsigned int filesize = 0;
     
-    // 1. 取得新程式的 Kernel 虛擬位址與大小
-    void* kernel_code_addr = find_program(path, &filesize);
-    if (kernel_code_addr == NULL) {
+    // 1. 取得新程式在 CPIO 中的位址
+    void* cpio_code_addr = find_program(path, &filesize);
+    if (cpio_code_addr == NULL) {
         return -1; // Can't find
     }
 
     struct task_struct *current = get_current();
 
-    // 2. 打造新的記憶體宇宙 (分配新 PGD 與新 Stack)
+    // 2. 打造新的記憶體宇宙 (分配新 PGD)
     unsigned long *new_pgd = (unsigned long *)allocate(PAGE_SIZE);
     memset(new_pgd, 0, PAGE_SIZE);
+
+    // 🌟 關鍵修正 1：複製 Kernel 的記憶體宇宙 (避免切換 satp 後瞬間當機)
+    for (int i = 256; i < 512; i++) {
+        new_pgd[i] = pgd[i]; 
+    }
+
+    // 🌟 關鍵修正 2：分配新記憶體並複製 Code (解決對齊與唯讀問題)
+    unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
+    void* user_code_ptr = allocate(aligned_filesize);
+    if (!user_code_ptr) return -1;
+    
+    memset(user_code_ptr, 0, aligned_filesize);
+    memcpy(user_code_ptr, cpio_code_addr, filesize);
+
     unsigned long new_stack = (unsigned long)allocate(STACK_SIZE);
 
-    // 3. 實體位址轉換 (供 map_pages 寫入 PTE 使用)
-    unsigned long code_pa = (unsigned long)kernel_code_addr - PAGE_OFFSET;
+    // 3. 實體位址轉換
+    unsigned long code_pa = (unsigned long)user_code_ptr - PAGE_OFFSET;
     unsigned long stack_pa = (unsigned long)new_stack - PAGE_OFFSET;
 
-    // 4. 映射 Code 與 Stack 到固定的 User 虛擬位址
-    map_pages(new_pgd, USER_CODE_VA, align(filesize, PAGE_SIZE), code_pa, PROT_USER_RX);
-    map_pages(new_pgd, USER_STACK_VA - STACK_SIZE, STACK_SIZE, stack_pa, PROT_USER_RW);
+    // 4. 映射 Code 與 Stack (使用與 create 相同的佈局與權限)
+    map_pages(new_pgd, USER_CODE_VA, aligned_filesize, code_pa, PROT_USER_BASE | PTE_R | PTE_W | PTE_X);
+    map_pages(new_pgd, USER_STACK_VA, STACK_SIZE, stack_pa, PROT_USER_RW);
 
-    // 5. 清理舊的記憶體 (避免 Memory Leak)
+    // 5. 清理舊的實體記憶體
+    // 注意：目前的寫法只 free 掉了舊的 PGD 這一層，
+    // 嚴格來說，舊 PGD 底下的 PMD、PTE 還有舊的 user_code_ptr 也會 Memory Leak，
+    // 但在基礎 OS 作業中，這暫時可以接受。
     if (current->pgd != NULL) {
-        // TODO: 嚴謹的做法應該要寫一個 free_page_table 函數來釋放舊 PGD 內的所有 PTE/PMD 頁面
         free(current->pgd);
     }
     if (current->user_stack != 0) {
         free((void*)current->user_stack);
+        // (如果有紀錄舊的 user_code_ptr，也應該在這裡 free 掉)
+    }
+    
+    // 👇 新增：既然我們現在有紀錄 code_frame 了，就在這裡把舊的程式碼實體記憶體釋放掉！
+    if (current->code_frame != 0) {
+        free((void*)current->code_frame);
     }
 
     // 6. 更新 TCB (Task Control Block) 資訊
     current->pgd = new_pgd;
     current->user_stack = new_stack;
-    current->user_sp = USER_STACK_VA;
-
-    // 7. 更新 Exception Return 狀態 (綁死 User 虛擬位址)
+    current->user_sp = USER_SP_VA; 
+    
+    // 👇 新增：紀錄新程式的實體位址與大小，讓未來的 fork 可以正確複製！
+    current->code_frame = user_code_ptr;
+    current->code_size = aligned_filesize;
+    // 7. 更新 Exception Return 狀態
     regs->sepc = USER_CODE_VA;
-    regs->sp = USER_STACK_VA;
+    regs->sp = USER_SP_VA;
 
-    // 8. 立即切換硬體 MMU！
-    // 因為這個 System Call 結束後，CPU 會執行 sret 返回 User Mode，
-    // 所以我們必須在這裡就把 satp 切換到新的 PGD，否則 sret 回去會踩到舊的記憶體空間。
+    // 8. 立即切換硬體 MMU 並刷新 TLB
     unsigned long pgd_pa = (unsigned long)new_pgd - PAGE_OFFSET;
-    unsigned long satp_val = (8UL << 60) | (pgd_pa >> 12);
     asm volatile(
-        "csrw satp, %0\n\t"
-        "sfence.vma zero, zero\n\t"
-        : : "r"(satp_val)
+        "sfence.vma zero, zero\n"
+        "csrw satp, %0\n"
+        "sfence.vma zero, zero\n"
+        :
+        : "r"(MAKE_SATP(pgd_pa))
+        : "memory"
     );
 
     return 0;
