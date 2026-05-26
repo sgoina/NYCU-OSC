@@ -78,7 +78,6 @@ long sys_exec(const char *path, struct pt_regs *regs) {
     
     // 抹除舊時代的單一實體指標
     current->user_stack = 0; 
-    current->code_frame = 0;
     
     // 🌟 關鍵修正 2：記錄 CPIO 位址與大小，讓 Page Fault Handler 去搬運
     current->cpio_addr = (unsigned long)cpio_code_addr;

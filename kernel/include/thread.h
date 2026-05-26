@@ -41,7 +41,6 @@ struct task_struct {
     // 👇 [新增] Virtual Memory 的專屬欄位：指向該 Process 的 Page Table
     unsigned long *pgd;
     // 👇 [新增] 紀錄程式碼的實體位址與大小，供 fork 使用
-    void* code_frame;
     unsigned int code_size;
     unsigned long cpio_addr;
     

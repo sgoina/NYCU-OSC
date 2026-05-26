@@ -194,6 +194,7 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
     task->cpio_addr = (unsigned long)program_va; 
     task->code_size = filesize; // 記錄原始檔案大小，以便 Page Fault 讀取
+    task->user_stack = 0;
 
     // 3. 註冊 VMA 帳本 (告訴 OS 這兩塊虛擬宇宙是合法的預約空間)
     
@@ -230,6 +231,7 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     // 💡 關鍵改變：sepc 和 sp 綁死在固定的虛擬位址！
     regs->sepc = USER_CODE_VA;             
     regs->sp = USER_SP_VA;
+    
     //regs->sepc = (unsigned long)entry;      // user process entry
     //regs->sp = task->user_sp;               // user stack
     
@@ -345,7 +347,6 @@ long fork_process(struct pt_regs *regs) {
         }
     }
 
-    child->code_frame = 0;
     child->user_stack = 0;
     // 讓 Child 知道自己如果踩空了 Code 區塊，該去哪裡討救兵
     child->cpio_addr = parent->cpio_addr;
