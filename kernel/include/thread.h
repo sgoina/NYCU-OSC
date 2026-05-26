@@ -2,11 +2,22 @@
 #define THREAD_H
 
 #include "trap.h"
+
 #define TASK_RUNNING 0
 #define TASK_ZOMBIE  1
 
 // Maximum number of signal
 #define MAX_SIGNALS 64
+
+#define MAX_VMAS 16
+
+struct vm_area_struct {
+    unsigned long vm_start; // 區塊起始虛擬位址
+    unsigned long vm_end;   // 區塊結束虛擬位址 (vm_start + size)
+    int vm_prot;            // 區塊權限 (R/W/X)
+    int vm_flags;
+    int used;               // 是否被使用
+};
 
 struct task_struct {
     struct thread_struct {
@@ -32,6 +43,9 @@ struct task_struct {
     // 👇 [新增] 紀錄程式碼的實體位址與大小，供 fork 使用
     void* code_frame;
     unsigned int code_size;
+    unsigned long cpio_addr;
+    
+    struct vm_area_struct vmas[MAX_VMAS];
 };
 
 struct task_struct* get_current();
@@ -45,6 +59,8 @@ void thread_exit();
 void thread_handle_signals(struct pt_regs *regs);
 void kill_zombies();
 void init_thread_queue();
+int is_overlap(struct task_struct *curr, unsigned long start, unsigned long len);
+unsigned long find_free_vma_region(struct task_struct *curr, unsigned long len);
 void idle();
 void foo();
 

@@ -9,7 +9,6 @@
 #include "video.h"
 #include "vm.h"
 
-#define STACK_SIZE 0x1000
 #define align(size, align_val) (((size) + (align_val) - 1) & ~((align_val) - 1))
 
 extern struct task_struct* run_queue; // thread.c
@@ -58,59 +57,61 @@ long sys_exec(const char *path, struct pt_regs *regs) {
     unsigned long *new_pgd = (unsigned long *)allocate(PAGE_SIZE);
     memset(new_pgd, 0, PAGE_SIZE);
 
-    // 🌟 關鍵修正 1：複製 Kernel 的記憶體宇宙 (避免切換 satp 後瞬間當機)
+    // 複製 Kernel 的記憶體宇宙 (避免切換 satp 後瞬間當機)
     for (int i = 256; i < 512; i++) {
         new_pgd[i] = pgd[i]; 
     }
 
-    // 🌟 關鍵修正 2：分配新記憶體並複製 Code (解決對齊與唯讀問題)
+    // 🌟 關鍵修正 1：拔除所有實體記憶體的 allocate 與 map_pages！
     unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
-    void* user_code_ptr = allocate(aligned_filesize);
-    if (!user_code_ptr) return -1;
-    
-    memset(user_code_ptr, 0, aligned_filesize);
-    memcpy(user_code_ptr, cpio_code_addr, filesize);
 
-    unsigned long new_stack = (unsigned long)allocate(STACK_SIZE);
-
-    // 3. 實體位址轉換
-    unsigned long code_pa = (unsigned long)user_code_ptr - PAGE_OFFSET;
-    unsigned long stack_pa = (unsigned long)new_stack - PAGE_OFFSET;
-
-    // 4. 映射 Code 與 Stack (使用與 create 相同的佈局與權限)
-    map_pages(new_pgd, USER_CODE_VA, aligned_filesize, code_pa, PROT_USER_BASE | PTE_R | PTE_W | PTE_X);
-    map_pages(new_pgd, USER_STACK_VA, STACK_SIZE, stack_pa, PROT_USER_RW);
-
-    // 5. 清理舊的實體記憶體
-    // 注意：目前的寫法只 free 掉了舊的 PGD 這一層，
-    // 嚴格來說，舊 PGD 底下的 PMD、PTE 還有舊的 user_code_ptr 也會 Memory Leak，
-    // 但在基礎 OS 作業中，這暫時可以接受。
+    // 3. 清理舊的實體記憶體
+    // 在 Demand Paging 下，我們無法用單一指標來釋放散落的分頁。
+    // 因此，我們拔除了 free(current->user_stack) 與 code_frame，
+    // 僅釋放 PGD 目錄 (在基礎 OS 課程中暫時接受底層 Page Table 的 Leak)。
     if (current->pgd != NULL) {
         free(current->pgd);
     }
-    if (current->user_stack != 0) {
-        free((void*)current->user_stack);
-        // (如果有紀錄舊的 user_code_ptr，也應該在這裡 free 掉)
-    }
-    
-    // 👇 新增：既然我們現在有紀錄 code_frame 了，就在這裡把舊的程式碼實體記憶體釋放掉！
-    if (current->code_frame != 0) {
-        free((void*)current->code_frame);
-    }
 
-    // 6. 更新 TCB (Task Control Block) 資訊
+    // 4. 更新 TCB (Task Control Block) 資訊
     current->pgd = new_pgd;
-    current->user_stack = new_stack;
+    
+    // 抹除舊時代的單一實體指標
+    current->user_stack = 0; 
+    current->code_frame = 0;
+    
+    // 🌟 關鍵修正 2：記錄 CPIO 位址與大小，讓 Page Fault Handler 去搬運
+    current->cpio_addr = (unsigned long)cpio_code_addr;
+    current->code_size = filesize;
+    
     current->user_sp = USER_SP_VA; 
     
-    // 👇 新增：紀錄新程式的實體位址與大小，讓未來的 fork 可以正確複製！
-    current->code_frame = user_code_ptr;
-    current->code_size = aligned_filesize;
-    // 7. 更新 Exception Return 狀態
+    // 5. 更新 Exception Return 狀態
     regs->sepc = USER_CODE_VA;
     regs->sp = USER_SP_VA;
+    
+    // 6. 註冊 VMA 帳本
+    // 註冊 Code 區塊
+    current->vmas[0].vm_start = USER_CODE_VA;
+    current->vmas[0].vm_end   = USER_CODE_VA + aligned_filesize;
+    current->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
+    current->vmas[0].used     = 1;
 
-    // 8. 立即切換硬體 MMU 並刷新 TLB
+    // 註冊 Stack 區塊 (給足 20 個 Page 以通過 demand 測試)
+    unsigned long stack_vma_size = 20 * PAGE_SIZE; 
+    unsigned long stack_top = (USER_SP_VA + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); 
+
+    current->vmas[1].vm_start = stack_top - stack_vma_size;
+    current->vmas[1].vm_end   = stack_top;
+    current->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
+    current->vmas[1].used     = 1;
+
+    // 其餘清空
+    for (int i = 2; i < MAX_VMAS; i++) {
+        current->vmas[i].used = 0;
+    }
+
+    // 7. 立即切換硬體 MMU 並刷新 TLB
     unsigned long pgd_pa = (unsigned long)new_pgd - PAGE_OFFSET;
     asm volatile(
         "sfence.vma zero, zero\n"
@@ -123,23 +124,6 @@ long sys_exec(const char *path, struct pt_regs *regs) {
 
     return 0;
 }
-/*
-long sys_exec(const char *path, struct pt_regs *regs) {
-    // find the program entry
-    void* entry_point = find_program(path);
-    if (entry_point == 0) {
-        return -1; // Can't find
-    }
-
-    struct task_struct *current = get_current();
-    // setting program counter new program entry
-    regs->sepc = (unsigned long)entry_point;
-    // clear user stack for new program
-    regs->sp = current->user_sp;
-
-    return 0;
-}
-*/
 
 // 4: fork
 long sys_fork(struct pt_regs *regs) {
@@ -240,6 +224,69 @@ int sys_kill(int pid, int signum) {
     return 0;
 }
 
+// 13: mmap
+long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
+    struct task_struct *curr = get_current();
+    unsigned long aligned_len = align(length, PAGE_SIZE); // 向上對齊 4KB
+    unsigned long target_addr = (unsigned long)addr;
+
+    // 🌟 1. 檢查 Flags 支援度
+    if (!(flags & MAP_ANONYMOUS)) {
+        // 目前基礎實作只支援匿名映射 (不綁定檔案)
+        uart_puts("Only MAP_ANONYMOUS is supported now.\n");
+        // 如果作業有要求 File-backed mapping 可以未來實作，這邊先放行或擋下
+    }
+
+    // 2. 決定目標虛擬位址
+    if (target_addr != 0) {
+        target_addr = target_addr & ~(PAGE_SIZE - 1); 
+        if (is_overlap(curr, target_addr, aligned_len)) {
+            target_addr = find_free_vma_region(curr, aligned_len);
+        }
+    } else {
+        target_addr = find_free_vma_region(curr, aligned_len);
+    }
+
+    if (target_addr == 0) return -1; // Out of memory
+
+    // 3. 登記到 VMA 結構中 (記帳)
+    int vma_idx = -1;
+    for (int i = 0; i < MAX_VMAS; i++) {
+        if (!curr->vmas[i].used) {
+            curr->vmas[i].vm_start = target_addr;
+            curr->vmas[i].vm_end = target_addr + aligned_len;
+            curr->vmas[i].vm_prot = prot;
+            curr->vmas[i].vm_flags = flags;
+            curr->vmas[i].used = 1;
+            vma_idx = i;
+            break;
+        }
+    }
+    if (vma_idx == -1) return -1; // VMA 滿了
+
+    // 4. 轉換 PROT 到 PTE 權限
+    unsigned long pte_prot = PROT_USER_BASE; 
+    if (prot & PROT_READ)  pte_prot |= PTE_R;
+    if (prot & PROT_WRITE) pte_prot |= PTE_W;
+    if (prot & PROT_EXEC)  pte_prot |= PTE_X;
+
+    // 🌟 5. 根據 MAP_POPULATE 決定是否立即分配實體記憶體
+    if (flags & MAP_POPULATE) {
+        // 立刻分配並映射 (Advanced 1 模式)
+        for (unsigned long va = target_addr; va < target_addr + aligned_len; va += PAGE_SIZE) {
+            void *new_page = allocate(PAGE_SIZE); 
+            if (!new_page) return -1;
+            memset(new_page, 0, PAGE_SIZE);       
+            
+            unsigned long page_pa = (unsigned long)new_page - PAGE_OFFSET;
+            map_pages(curr->pgd, va, PAGE_SIZE, page_pa, pte_prot);
+        }
+        asm volatile("sfence.vma zero, zero" ::: "memory");
+    } 
+
+    return target_addr; // 發放空虛擬位址鑰匙給 User
+}
+
 void syscall_handler(struct pt_regs *regs) {
     // a7 stores system call number
     unsigned long syscall_num = regs->a7;
@@ -307,6 +354,10 @@ void syscall_handler(struct pt_regs *regs) {
         case 12: // kill
             // a0 = pid, a1 = signum
             ret = sys_kill((int)regs->a0, (int)regs->a1); 
+            break;
+        case 13: // mmap
+            // a0 = addr, a1 = length, a2 = prot, a3 = flags
+            ret = sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
             break;
             
         default:

@@ -8,8 +8,6 @@
 #include "utils.h"
 #include "vm.h"
 
-#define STACK_SIZE 0x1000
-
 #define align(size, align_val) (((size) + (align_val) - 1) & ~((align_val) - 1))
 
 extern void ret_from_exception(); // start.S
@@ -129,14 +127,14 @@ struct task_struct* thread_create(void (*threadfn)()) {
     task->entry_point = threadfn;
     task->pid = nr_threads++;
     task->state = TASK_RUNNING;
-    task->kernel_stack = (unsigned long)allocate(STACK_SIZE);
-    task->kernel_sp = task->kernel_stack + STACK_SIZE;
+    task->kernel_stack = (unsigned long)allocate(PAGE_SIZE);
+    task->kernel_sp = task->kernel_stack + PAGE_SIZE;
     task->user_stack = 0; // because this thread is kernel thread
     task->thread.sp = task->kernel_sp;
     task->pgd = pgd; // for kernel thread
     
     // 👇 新增：Kernel Thread 沒有專屬的 User Code 空間
-    task->code_frame = 0;
+    task->cpio_addr = 0;
     task->code_size = 0;
     
     // initialize signal-related info
@@ -145,6 +143,10 @@ struct task_struct* thread_create(void (*threadfn)()) {
     task->is_handling_signal = 0;
     for(int i = 0; i < MAX_SIGNALS; i++){
         task->signal_handlers[i] = 0;
+    }
+    
+    for (int i = 0; i < MAX_VMAS; i++) {
+        task->vmas[i].used = 0;
     }
     
     enqueue(&run_queue, task);
@@ -161,12 +163,12 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     task->pid = nr_threads++;
     task->state = TASK_RUNNING;
     
-    task->kernel_stack = (unsigned long)allocate(STACK_SIZE); 
-    task->kernel_sp = task->kernel_stack + STACK_SIZE;
+    task->kernel_stack = (unsigned long)allocate(PAGE_SIZE); 
+    task->kernel_sp = task->kernel_stack + PAGE_SIZE;
     
     // ❌ 刪除這兩行重複的分配
-    //task->user_stack = (unsigned long)allocate(STACK_SIZE);
-    //task->user_sp = task->user_stack + STACK_SIZE;
+    //task->user_stack = (unsigned long)allocate(PAGE_SIZE);
+    //task->user_sp = task->user_stack + PAGE_SIZE;
     
     task->pending_signals = 0;
     task->is_handling_signal = 0;
@@ -175,53 +177,48 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
         task->signal_handlers[i] = 0;
     }
     
-    /// --- 👇 Virtual Memory 核心新增邏輯 ---
+    /// --- 👇 Virtual Memory 核心新增邏輯 (Demand Paging 版本) ---
 
-    // 1. 分配專屬的 PGD (注意 allocate 回傳的是 Kernel VA)
+    // 1. 僅分配專屬的 PGD
     task->pgd = (unsigned long*)allocate(PAGE_SIZE);
     memset(task->pgd, 0, PAGE_SIZE);
     
-    // 🌟 關鍵修正：將 Kernel 的記憶體宇宙（上半部）複製給 User Process
-    // 在 Sv39 中，index 256 到 511 負責處理高位址空間
+    // 複製 Kernel 的記憶體宇宙（上半部）
     for (int i = 256; i < 512; i++) {
         task->pgd[i] = pgd[i];
     }
 
-    // 2. 分配實體 Stack
-    task->user_stack = (unsigned long)allocate(STACK_SIZE);
-    task->user_sp = USER_SP_VA; // 虛擬位址固定！
-
-    // 3. 映射 Code 與 Stack 到專屬 PGD
-    // 必須將 allocate 回傳的 VA 轉為 PA 才能存入 Page Table
-    unsigned long stack_pa = (unsigned long)task->user_stack - PAGE_OFFSET;
-    
-    // ✅ 關鍵修正：分配新的實體記憶體給 User Program
+    // 🌟 2. 移除實體 Code 與 Stack 的 allocate() 與 map_pages()！
+    // 我們不在此處分配實體記憶體，改由紀錄 CPIO 的原始位址與大小
+    // 💡 提示：請確保你的 task_struct 有 cpio_addr 與 code_size 欄位
     unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
-    void* user_code_ptr = allocate(aligned_filesize); // 分配 4KB 對齊的記憶體
-    if (!user_code_ptr) {
-        uart_puts("User code allocation failed.\n");
-        return NULL;
+    task->cpio_addr = (unsigned long)program_va; 
+    task->code_size = filesize; // 記錄原始檔案大小，以便 Page Fault 讀取
+
+    // 3. 註冊 VMA 帳本 (告訴 OS 這兩塊虛擬宇宙是合法的預約空間)
+    
+    // 註冊 Code 區塊 (VMA 0)
+    task->vmas[0].vm_start = USER_CODE_VA;
+    task->vmas[0].vm_end   = USER_CODE_VA + aligned_filesize;
+    task->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
+    task->vmas[0].used     = 1;
+
+    // 註冊 Stack 區塊 (VMA 1)
+    unsigned long stack_vma_size = 20 * PAGE_SIZE; 
+    unsigned long stack_top = (USER_SP_VA + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); 
+    
+    task->vmas[1].vm_start = stack_top - stack_vma_size;
+    task->vmas[1].vm_end   = stack_top;
+    task->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
+    task->vmas[1].used     = 1;
+
+    // 其餘 VMA 清空
+    for (int i = 2; i < MAX_VMAS; i++) {
+        task->vmas[i].used = 0;
     }
-
-    // 清空這塊記憶體 (這對 .bss 段非常重要，確保未初始化的全域變數為 0)
-    memset(user_code_ptr, 0, aligned_filesize);
-
-    // 將程式碼內容複製進來 
-    // (前提：program_pa 必須是 Kernel 可以直接存取的 Virtual Address)
-    memcpy(user_code_ptr, program_va, filesize);
     
-    // 👇 新增：把這塊分配出來的記憶體位址和大小記錄在 TCB 中，讓 fork 可以用！
-    task->code_frame = user_code_ptr;
-    task->code_size = aligned_filesize;
+    // --- 👆 Virtual Memory 核心邏輯結束 ---
     
-    // 從 find_program 拿到的是 Kernel VA:
-    unsigned long code_pa = (unsigned long)user_code_ptr - PAGE_OFFSET;
-    
-    map_pages(task->pgd, USER_CODE_VA, aligned_filesize, code_pa, PROT_USER_RX);
-    map_pages(task->pgd, USER_STACK_VA, STACK_SIZE, stack_pa, PROT_USER_RW);
-
-    // --- 👆 Virtual Memory 核心新增邏輯結束 ---
-
     // Simulate back from "sret" condition
     struct pt_regs* regs = (struct pt_regs*)(task->kernel_sp - sizeof(struct pt_regs));
     for (int i = 0; i < sizeof(struct pt_regs) / 8; i++){
@@ -262,8 +259,8 @@ long fork_process(struct pt_regs *regs) {
     child->pid = nr_threads++;
     child->state = TASK_RUNNING;
     
-    child->kernel_stack = (unsigned long)allocate(STACK_SIZE); 
-    child->kernel_sp = child->kernel_stack + STACK_SIZE;
+    child->kernel_stack = (unsigned long)allocate(PAGE_SIZE); 
+    child->kernel_sp = child->kernel_stack + PAGE_SIZE;
     
     child->pending_signals = 0;
     child->is_handling_signal = 0;
@@ -294,30 +291,65 @@ long fork_process(struct pt_regs *regs) {
         child->pgd[i] = pgd[i];
     }
 
-    // 4. 分配並複製 User Stack 實體記憶體
-    child->user_stack = (unsigned long)allocate(STACK_SIZE);
-    memcpy((void*)child->user_stack, (void*)parent->user_stack, STACK_SIZE);
-    child->user_sp = parent->user_sp; // 虛擬位址與 Parent 完全相同
+    // 🌟 統一天下：使用 VMA 進行 Page-by-Page 的拷貝
+    // 這段迴圈會自動幫你處理 Code (vmas[0]), Stack (vmas[1]), 以及所有的 mmap！
+    for (int i = 0; i < MAX_VMAS; i++) {
+        child->vmas[i] = parent->vmas[i]; // 複製帳本
 
-    // 5. 分配並複製 User Code 實體記憶體
-    // ⚠️ 依賴警告：你的 parent task_struct 必須要有 code_size 和 code_frame 這兩個數值！
-    child->code_frame = allocate(parent->code_size);
-    if (!child->code_frame){
-        uart_puts("Allocate user code failed!\n");
-        return -1;
+        if (child->vmas[i].used) {
+            // 🌟🌟🌟 實現你的想法：Code 區塊不複製實體記憶體！🌟🌟🌟
+            // 因為程式碼是唯讀的，我們讓 Child 保持 Page Table 空白。
+            // 等 Child 執行到這裡時，會觸發 Instruction Page Fault，
+            // 透過你寫好的 do_trap，從 child->cpio_addr 重新載入，完美達成 Demand Paging！
+            if (child->vmas[i].vm_start == USER_CODE_VA) {
+                continue; // 直接跳過實體記憶體拷貝！
+            }
+
+            unsigned long start = child->vmas[i].vm_start;
+            unsigned long end = child->vmas[i].vm_end;
+            
+            // 每次前進 4KB (一頁)，負責拷貝 Stack 或是 Mmap 出來的可寫入記憶體
+            for (unsigned long va = start; va < end; va += PAGE_SIZE) {
+                
+                // 1. 偷看 Parent 的 Page Table
+                unsigned long *pte = get_pte(parent->pgd, va);
+                
+                // 如果 PTE 存在且有效 (代表 Parent 真的有這塊實體記憶體)
+                if (pte != NULL && (*pte & PTE_V)) {
+                    
+                    // 2. 幫 Child 配置一塊新的實體記憶體
+                    void *child_page = allocate(PAGE_SIZE);
+                    if (!child_page) return -1; // OOM
+
+                    // 3. 安全拷貝資料：
+                    // 為了避免 Kernel 去讀 User VA (va) 觸發 SUM 保護機制，
+                    // 我們直接從 PTE 算出 Parent 的實體位址，並轉為 Kernel 可以讀的位址。
+                    unsigned long parent_pa = (*pte >> 10) << 12;
+                    void *parent_kernel_va = (void *)(parent_pa + PAGE_OFFSET);
+                    
+                    memcpy(child_page, parent_kernel_va, PAGE_SIZE);
+
+                    // 4. 將權限轉為 PTE 格式並映射到 Child 的 Page Table
+                    unsigned long child_pa = (unsigned long)child_page - PAGE_OFFSET;
+                    
+                    unsigned long pte_prot = PROT_USER_BASE; 
+                    if (child->vmas[i].vm_prot & PROT_READ)  pte_prot |= PTE_R;
+                    if (child->vmas[i].vm_prot & PROT_WRITE) pte_prot |= PTE_W;
+                    if (child->vmas[i].vm_prot & PROT_EXEC)  pte_prot |= PTE_X;
+                    
+                    map_pages(child->pgd, va, PAGE_SIZE, child_pa, pte_prot);
+                }
+                // 💡 如果 pte 為 NULL，代表 Parent 還沒觸發過 Demand Paging
+                // 我們就什麼都不做，完美跳過這個未爆彈！
+            }
+        }
     }
-    memcpy((void*)child->code_frame, (void*)parent->code_frame, parent->code_size);
+
+    child->code_frame = 0;
+    child->user_stack = 0;
+    // 讓 Child 知道自己如果踩空了 Code 區塊，該去哪裡討救兵
+    child->cpio_addr = parent->cpio_addr;
     child->code_size = parent->code_size;
-
-    // 6. 計算實體位址並寫入 Child 的 Page Table
-    unsigned long child_code_pa = (unsigned long)child->code_frame - PAGE_OFFSET;
-    unsigned long child_stack_pa = child->user_stack - PAGE_OFFSET;
-    
-    // ✅ 關鍵修正：與 create/exec 保持一致的虛擬位址範圍與權限
-    map_pages(child->pgd, USER_CODE_VA, child->code_size, child_code_pa, PROT_USER_BASE | PTE_R | PTE_W | PTE_X);
-    map_pages(child->pgd, USER_STACK_VA, STACK_SIZE, child_stack_pa, PROT_USER_RW);
-
-    // --- 👆 Virtual Memory 宇宙複製結束 👆 ---
 
     // Return value 0 for child thread
     child_regs->a0 = 0;
@@ -392,14 +424,14 @@ void thread_handle_signals(struct pt_regs *regs) {
             curr->is_handling_signal = 1;
 
             // Initialize signal stack
-            curr->signal_stack = (unsigned long)allocate(STACK_SIZE);
+            curr->signal_stack = (unsigned long)allocate(PAGE_SIZE);
             // 🌟 關鍵修正 1：將分配到的實體記憶體映射到 User 虛擬位址
             unsigned long sig_stack_pa = curr->signal_stack - PAGE_OFFSET;
             // 注意：必須加上 PTE_X，因為我們要讓 User 執行放在 Stack 裡的 Trampoline Code！
-            map_pages(curr->pgd, USER_SIG_STACK_VA, STACK_SIZE, sig_stack_pa, PROT_USER_RWX);
+            map_pages(curr->pgd, USER_SIG_STACK_VA, PAGE_SIZE, sig_stack_pa, PROT_USER_RWX);
             
-            unsigned long kernel_sp = curr->signal_stack + STACK_SIZE; 
-            unsigned long user_sp = USER_SIG_STACK_VA + STACK_SIZE; 
+            unsigned long kernel_sp = curr->signal_stack + PAGE_SIZE; 
+            unsigned long user_sp = USER_SIG_STACK_VA + PAGE_SIZE; 
             
             // Put trampoline code into signal stack
             unsigned long tramp_size = sigreturn_trampoline_end - sigreturn_trampoline_start;
@@ -463,6 +495,31 @@ void kill_zombies() {
         }
     }
     asm volatile("csrs sstatus, %0" : : "r"(sstatus & 2));
+}
+
+// 檢查是否與現有的 VMA 重疊
+int is_overlap(struct task_struct *curr, unsigned long start, unsigned long len) {
+    unsigned long end = start + len;
+    for (int i = 0; i < MAX_VMAS; i++) {
+        if (curr->vmas[i].used) {
+            // 如果 [start, end) 和 [vm_start, vm_end) 有交集，就是重疊
+            if (!(end <= curr->vmas[i].vm_start || start >= curr->vmas[i].vm_end)) {
+                return 1; 
+            }
+        }
+    }
+    return 0;
+}
+
+unsigned long find_free_vma_region(struct task_struct *curr, unsigned long len) {
+    unsigned long search_addr = MMAP_BASE;
+    while (search_addr < USER_SP_VA) { // Can't over user space
+        if (!is_overlap(curr, search_addr, len)) {
+            return search_addr;
+        }
+        search_addr += PAGE_SIZE; // 往下找一個 Page
+    }
+    return 0; // 找不到空間
 }
 
 void idle() {

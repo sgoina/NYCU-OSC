@@ -1,9 +1,12 @@
 #define PAGE_OFFSET   0xffffffc000000000UL
 
 #define USER_CODE_VA  0x0000000000000000UL
-#define USER_STACK_VA 0x0000003ffffff000UL
+#define USER_STACK_VA 0x0000003ffff00000UL
 #define USER_SP_VA    0x0000004000000000UL
-#define USER_SIG_STACK_VA 0x0000003ffff00000UL
+#define USER_SIG_STACK_VA 0x0000003000000000UL
+// 尋找一塊夠大的連續虛擬記憶體 (由一個 Base Address 往上找)
+// 定義一個不會跟原本 Code (0x0) 或 Stack (0x3ffffff000) 衝突的起始位址
+#define MMAP_BASE     0x0000001000000000UL
 
 /* Memory map */
 #define PAGE_SIZE     (1UL << 12) 
@@ -38,6 +41,15 @@
 #define PROT_USER_RW   (PROT_USER_BASE | PTE_R | PTE_W)
 #define PROT_USER_RWX  (PROT_USER_BASE | PTE_R | PTE_W | PTE_X)
 
+// PROT flags 定義
+#define PROT_NONE  0
+#define PROT_READ  1
+#define PROT_WRITE 2
+#define PROT_EXEC  4
+
+#define MAP_ANONYMOUS 0x20
+#define MAP_POPULATE  0x8000
+
 #define SATP_SV39           (8UL << 60)
 #define MAKE_SATP(pgd_pa)   (SATP_SV39 | ((unsigned long)(pgd_pa) >> 12))
 
@@ -48,3 +60,5 @@ void setup_vm();
 void drop_identity_map();
 
 void map_pages(unsigned long *user_pgd, unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
+
+unsigned long* get_pte(unsigned long *pgd, unsigned long va);
