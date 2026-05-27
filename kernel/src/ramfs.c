@@ -197,7 +197,7 @@ int exec(const char *filename){
     return -1;
 }
 
-// find the program entry
+// find the program entry and its size
 void* find_program(const char *filename, unsigned int *filesize_out) {
     char *ptr = (char *)cpio_address;
     while (strncmp(ptr + sizeof(struct cpio_t), "TRAILER!!!", 10)) {
@@ -207,8 +207,7 @@ void* find_program(const char *filename, unsigned int *filesize_out) {
         int headsize = align(sizeof(struct cpio_t) + namesize, 4);
         int datasize = align(filesize, 4);
         if (!strncmp(ptr + sizeof(struct cpio_t), filename, namesize)) {
-            void* program_data_addr = (void*)(ptr + headsize); // 這是 CPIO 內容在 Kernel 中的虛擬位址
-            // 透過指標回傳 filesize
+            void* program_data_addr = (void*)(ptr + headsize);
             if (filesize_out != NULL)
                 *filesize_out = filesize;
             return program_data_addr; 

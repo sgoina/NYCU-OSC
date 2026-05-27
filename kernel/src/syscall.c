@@ -45,75 +45,57 @@ long sys_uart_write(const char *buf, long count) {
 long sys_exec(const char *path, struct pt_regs *regs) {
     unsigned int filesize = 0;
     
-    // 1. 取得新程式在 CPIO 中的位址
+    // get the address in CPIO and size of this program
     void* cpio_code_addr = find_program(path, &filesize);
-    if (cpio_code_addr == NULL) {
+    if (cpio_code_addr == NULL)
         return -1; // Can't find
-    }
-
+        
+    unsigned long aligned_filesize = align(filesize, PAGE_SIZE); // align file size to 4KB
     struct task_struct *current = get_current();
 
-    // 2. 打造新的記憶體宇宙 (分配新 PGD)
     unsigned long *new_pgd = (unsigned long *)allocate(PAGE_SIZE);
     memset(new_pgd, 0, PAGE_SIZE);
 
-    // 複製 Kernel 的記憶體宇宙 (避免切換 satp 後瞬間當機)
+    // Copy kernel space to higher-half pgd
     for (int i = 256; i < 512; i++) {
         new_pgd[i] = pgd[i]; 
     }
-
-    // 🌟 關鍵修正 1：拔除所有實體記憶體的 allocate 與 map_pages！
-    unsigned long aligned_filesize = align(filesize, PAGE_SIZE);
-
-    // 3. 清理舊的實體記憶體
-    // 在 Demand Paging 下，我們無法用單一指標來釋放散落的分頁。
-    // 因此，我們拔除了 free(current->user_stack) 與 code_frame，
-    // 僅釋放 PGD 目錄 (在基礎 OS 課程中暫時接受底層 Page Table 的 Leak)。
-    if (current->pgd != NULL) {
+    
+    // update process pgd
+    if (current->pgd != NULL)
         free(current->pgd);
-    }
-
-    // 4. 更新 TCB (Task Control Block) 資訊
     current->pgd = new_pgd;
-    
-    // 抹除舊時代的單一實體指標
-    current->user_stack = 0; 
-    
-    // 🌟 關鍵修正 2：記錄 CPIO 位址與大小，讓 Page Fault Handler 去搬運
+        
     current->cpio_addr = (unsigned long)cpio_code_addr;
     current->code_size = filesize;
     
+    current->user_stack = 0; 
     current->user_sp = USER_SP_VA; 
     
-    // 5. 更新 Exception Return 狀態
     regs->sepc = USER_CODE_VA;
     regs->sp = USER_SP_VA;
     
-    // 6. 註冊 VMA 帳本
-    // 註冊 Code 區塊
+    // record vmas for code and user stack
     current->vmas[0].vm_start = USER_CODE_VA;
     current->vmas[0].vm_end   = USER_CODE_VA + aligned_filesize;
     current->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
     current->vmas[0].used     = 1;
 
-    // 註冊 Stack 區塊 (給足 20 個 Page 以通過 demand 測試)
     unsigned long stack_vma_size = 20 * PAGE_SIZE; 
-    unsigned long stack_top = (USER_SP_VA + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); 
 
-    current->vmas[1].vm_start = stack_top - stack_vma_size;
-    current->vmas[1].vm_end   = stack_top;
+    current->vmas[1].vm_start = USER_SP_VA - stack_vma_size;
+    current->vmas[1].vm_end   = USER_SP_VA;
     current->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
     current->vmas[1].used     = 1;
 
-    // 其餘清空
+    // clear the info of other regions
     for (int i = 2; i < MAX_VMAS; i++) {
         current->vmas[i].used = 0;
     }
 
-    // 7. 立即切換硬體 MMU 並刷新 TLB
-    unsigned long pgd_pa = (unsigned long)new_pgd - PAGE_OFFSET;
+    // Update pgd and flush TLB, ready to go to new process
+    unsigned long pgd_pa = (unsigned long)virt_to_phys(new_pgd);
     asm volatile(
-        "sfence.vma zero, zero\n"
         "csrw satp, %0\n"
         "sfence.vma zero, zero\n"
         :
@@ -226,29 +208,28 @@ int sys_kill(int pid, int signum) {
 // 13: mmap
 void* sys_mmap(void *addr, unsigned long length, int prot, int flags) {
     struct task_struct *curr = get_current();
-    unsigned long aligned_len = align(length, PAGE_SIZE); // 向上對齊 4KB
+    unsigned long aligned_len = align(length, PAGE_SIZE); // align size to 4KB
     unsigned long target_addr = (unsigned long)addr;
 
-    // 🌟 1. 檢查 Flags 支援度
-    if (!(flags & MAP_ANONYMOUS)) {
-        // 目前基礎實作只支援匿名映射 (不綁定檔案)
-        uart_puts("Only MAP_ANONYMOUS is supported now.\n");
-        // 如果作業有要求 File-backed mapping 可以未來實作，這邊先放行或擋下
-    }
-
-    // 2. 決定目標虛擬位址
+    // Check flags
+    if (!(flags & MAP_ANONYMOUS))
+        return (void*)-1;
+    
+    // Check whether address is NULL. If it is NULL, find the region by kernel
     if (target_addr != 0) {
-        target_addr = target_addr & ~(PAGE_SIZE - 1); 
-        if (is_overlap(curr, target_addr, aligned_len)) {
+        target_addr = target_addr & ~(PAGE_SIZE - 1); // align begin address to 4KB
+        // Check whether the region be used. If there is used, find another space
+        if (is_overlap(curr, target_addr, aligned_len)) 
             target_addr = find_free_vma_region(curr, aligned_len);
-        }
-    } else {
+    } 
+    else 
         target_addr = find_free_vma_region(curr, aligned_len);
-    }
 
-    if (target_addr == 0) return (void*)-1; // Out of memory
+    // Can't find suitable region
+    if (target_addr == 0)
+        return (void*)-1;
 
-    // 3. 登記到 VMA 結構中 (記帳)
+    // Record the region in vmas
     int vma_idx = -1;
     for (int i = 0; i < MAX_VMAS; i++) {
         if (!curr->vmas[i].used) {
@@ -261,29 +242,34 @@ void* sys_mmap(void *addr, unsigned long length, int prot, int flags) {
             break;
         }
     }
-    if (vma_idx == -1) return (void*)-1; // VMA 滿了
+    // curr->vmas is full
+    if (vma_idx == -1)
+        return (void*)-1; 
 
-    // 4. 轉換 PROT 到 PTE 權限
+    // Convert PROT to PTE permission
     unsigned long pte_prot = PROT_USER_BASE; 
-    if (prot & PROT_READ)  pte_prot |= PTE_R;
-    if (prot & PROT_WRITE) pte_prot |= PTE_W;
-    if (prot & PROT_EXEC)  pte_prot |= PTE_X;
+    if (prot & PROT_READ)
+        pte_prot |= PTE_R;
+    if (prot & PROT_WRITE)
+        pte_prot |= PTE_W;
+    if (prot & PROT_EXEC)
+        pte_prot |= PTE_X;
 
-    // 🌟 5. 根據 MAP_POPULATE 決定是否立即分配實體記憶體
+    // MAP_POPULATE: Allocate physical pages immediately 
     if (flags & MAP_POPULATE) {
-        // 立刻分配並映射 (Advanced 1 模式)
         for (unsigned long va = target_addr; va < target_addr + aligned_len; va += PAGE_SIZE) {
             void *new_page = allocate(PAGE_SIZE); 
-            if (!new_page) return (void*)-1;
+            if (!new_page)
+                return (void*)-1;
             memset(new_page, 0, PAGE_SIZE);       
             
-            unsigned long page_pa = (unsigned long)new_page - PAGE_OFFSET;
+            unsigned long page_pa = virt_to_phys((unsigned long)new_page);
             map_pages(curr->pgd, va, PAGE_SIZE, page_pa, pte_prot);
         }
         asm volatile("sfence.vma zero, zero" ::: "memory");
     } 
 
-    return (void*)target_addr; // 發放空虛擬位址鑰匙給 User
+    return (void*)target_addr; // return virtual address of the begin of this region
 }
 
 void syscall_handler(struct pt_regs *regs) {

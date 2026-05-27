@@ -8,15 +8,15 @@
 
 // Maximum number of signal
 #define MAX_SIGNALS 64
-
+// Maximum number of memory regions
 #define MAX_VMAS 16
 
 struct vm_area_struct {
-    unsigned long vm_start; // 區塊起始虛擬位址
-    unsigned long vm_end;   // 區塊結束虛擬位址 (vm_start + size)
-    int vm_prot;            // 區塊權限 (R/W/X)
-    int vm_flags;
-    int used;               // 是否被使用
+    unsigned long vm_start; 
+    unsigned long vm_end;
+    int vm_prot;            // The access protection for the region
+    int vm_flags;           // MAP_ANONYMOUS/MAP_POPULATE
+    int used;
 };
 
 struct task_struct {
@@ -38,13 +38,10 @@ struct task_struct {
     int is_handling_signal;// Is Handling Signal (boolean)
     unsigned long signal_handlers[MAX_SIGNALS]; // signal handlers, find by signal num
     struct pt_regs signal_saved_context; // regs backup, sigreturn will return back to original regs 
-    // 👇 [新增] Virtual Memory 的專屬欄位：指向該 Process 的 Page Table
-    unsigned long *pgd;
-    // 👇 [新增] 紀錄程式碼的實體位址與大小，供 fork 使用
-    unsigned int code_size;
-    unsigned long cpio_addr;
-    
-    struct vm_area_struct vmas[MAX_VMAS];
+    unsigned long *pgd; // the pgd of this thread
+    unsigned int code_size; 
+    unsigned long cpio_addr; // the address of the program code in CPIO
+    struct vm_area_struct vmas[MAX_VMAS]; // memory regions
 };
 
 struct task_struct* get_current();

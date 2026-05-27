@@ -3,6 +3,8 @@
 #include "utils.h"
 #include "vm.h"
 
+// __attribute__ ((attribute-list)): setting attribute for this variable
+// Assign page tables to be in ".data" section to avoid being in ".bss" section to be clear.
 unsigned long __attribute__((section(".data"), aligned(PAGE_SIZE)))
     pgd[ENTRIES_PER_TABLE] = { 0 };
 
@@ -12,126 +14,105 @@ unsigned long __attribute__((section(".data"), aligned(PAGE_SIZE)))
 unsigned long __attribute__((section(".data"), aligned(PAGE_SIZE)))
     uart_pte[ENTRIES_PER_TABLE] = { 0 };
     
-#define PLIC_PTE_COUNT (0x04000000UL / PMD_SIZE)
+#define PLIC_PTE_COUNT (0x04000000UL / PMD_SIZE) // the size of PLIC from devicetree
 unsigned long __attribute__((section(".data"), aligned(PAGE_SIZE)))
     plic_pte[PLIC_PTE_COUNT][ENTRIES_PER_TABLE] = { { 0 } };
     
-#define FB_PTE_COUNT (0x01000000UL / PMD_SIZE)
+#define FB_PTE_COUNT (0x01000000UL / PMD_SIZE) // the size of framebuffer from devicetree
 unsigned long __attribute__((section(".data"), aligned(PAGE_SIZE)))
     fb_pte[FB_PTE_COUNT][ENTRIES_PER_TABLE] = { { 0 } };
   
-
+// Set up page tables for identity mapping and kernel mapping
 void setup_vm()
 {
-    // TODO: Set up page tables for identity mapping and kernel mapping
-    // 取得各個 Page Table 的物理位址 (MMU 尚未開啟時使用)
     unsigned long pgd_pa = (unsigned long)pgd;
-    if (pgd_pa >= PAGE_OFFSET) pgd_pa -= PAGE_OFFSET;
-    unsigned long *pgd_phys = (unsigned long *)pgd_pa;
-
-    // 請在 setup_vm() 進入迴圈前，先定義好 MMIO 的實體資訊
+    
+    // MMIO info
     unsigned long target_uart_pa = 0xd4017000UL;
     //unsigned long uart_size      = 0x00000100UL;
+    unsigned long uart_2mb_base = target_uart_pa & ~((1UL << 21) - 1); // Begin address in 2MB block of UART
     unsigned long target_plic_pa = 0xe0000000UL;
     unsigned long plic_size      = 0x04000000UL;
     unsigned long target_fb_pa   = 0x7f000000UL;
     unsigned long fb_size        = 0x01000000UL;
 
-    // --- Build identity + higher-half mappings for 4GB RAM ---
+    // Build identity + higher-half mappings
     for (int i = 0; i < LINEAR_MAP_GIB; i++) {
         unsigned long pmd_pa = (unsigned long)pmd[i];
-        if (pmd_pa >= PAGE_OFFSET) pmd_pa -= PAGE_OFFSET;
-        unsigned long *pmd_phys = (unsigned long *)pmd_pa;
 
-        unsigned long pa_base = (unsigned long)i * PGD_SIZE;
-        unsigned long va_base = PAGE_OFFSET + pa_base;
+        unsigned long pgd_base_pa = (unsigned long)i * PGD_SIZE;
+        unsigned long pgd_base_va = phys_to_virt(pgd_base_pa);
 
-        // 設定 PGD 指向 PMD 的目錄 (使用 PTE_V)
-        unsigned long id_pgd_idx = (pa_base >> PGD_SHIFT) & 0x1FF;
-        unsigned long high_pgd_idx = (va_base >> PGD_SHIFT) & 0x1FF;
+        // PGD entry points to PMD
+        unsigned long id_pgd_idx = (pgd_base_pa >> PGD_SHIFT) & 0x1FF;
+        unsigned long high_pgd_idx = (pgd_base_va >> PGD_SHIFT) & 0x1FF;
         
-        pgd_phys[id_pgd_idx] = MAKE_PTE(pmd_pa, PTE_V);
-        pgd_phys[high_pgd_idx] = MAKE_PTE(pmd_pa, PTE_V);
+        pgd[id_pgd_idx] = MAKE_PTE(pmd_pa, PTE_V);
+        pgd[high_pgd_idx] = MAKE_PTE(pmd_pa, PTE_V);
 
-        // 填寫 512 個 PMD entry (2MB 巨型分頁)
+        // Set PMD
         for (int j = 0; j < ENTRIES_PER_TABLE; j++) {
-            unsigned long pa = pa_base + ((unsigned long)j * PMD_SIZE);
+            unsigned long pa = pgd_base_pa + ((unsigned long)j * PMD_SIZE);
             
-            // 找出 UART 所在的 2MB 區塊起點
-            unsigned long uart_2mb_base = target_uart_pa & ~((1UL << 21) - 1);
-
+            // If PMD entry is for UART
             if (pa == uart_2mb_base) {
-                // 1. 取得 PTE 表的實體位址
-                unsigned long pte_pa = (unsigned long)uart_pte;
-                if (pte_pa >= PAGE_OFFSET) pte_pa -= PAGE_OFFSET;
-                unsigned long *pte_phys = (unsigned long *)pte_pa;
-
-                // 2. 將 PMD entry 指向 PTE 表 (注意：指向下一級 Page Table 只需要 PTE_V，不需要 RWX 權限)
-                pmd_phys[j] = MAKE_PTE(pte_pa, PTE_V);
-
-                // 3. 填寫 PTE 表，將這 2MB 切成 512 個 4KB 頁面
+                unsigned long uart_pte_pa = (unsigned long)uart_pte;
+                // PMD entry points to uart_pte
+                pmd[i][j] = MAKE_PTE(uart_pte_pa, PTE_V);
+                // Set UART PTE. Because UART is only 0x100 Bytes, so need to determine the address is for which
                 for (int k = 0; k < ENTRIES_PER_TABLE; k++) {
-                    unsigned long page_pa = pa + ((unsigned long)k * PAGE_SIZE);
+                    unsigned long uart_pa = pa + ((unsigned long)k * PAGE_SIZE);
                     
-                    // 只有確切落在 UART 範圍內的 4KB 頁面才設定為 PROT_DEVICE
-                    if (page_pa >= target_uart_pa && page_pa < (target_uart_pa + PAGE_SIZE)) {
-                        pte_phys[k] = MAKE_PTE(page_pa, PROT_DEVICE);
-                    } 
-                    // 其他空間設為一般 Kernel 權限 (或是依需求設為 0 不映射)
-                    else {
-                        pte_phys[k] = MAKE_PTE(page_pa, PROT_KERNEL);
-                    }
+                    // The pte entry sets to PROT_DEVICE for UART address space
+                    if (uart_pa >= target_uart_pa && uart_pa < (target_uart_pa + PAGE_SIZE))
+                        uart_pte[k] = MAKE_PTE(uart_pa, PROT_DEVICE);
+                    // Other pte entry sets to PROT_KERNEL
+                    else 
+                        uart_pte[k] = MAKE_PTE(uart_pa, PROT_KERNEL);
                 }
             } 
-            // PLIC 範圍 (使用 3-level mapping，4KB 細粒度)
+            // If PMD entry is for PLIC
             else if (pa >= target_plic_pa && pa < (target_plic_pa + plic_size)) {
-                // 計算當前的 pa 是 PLIC 範圍內的第幾個 2MB 區塊 (0 ~ 31)
+                // The index of block for PLIC
                 unsigned long plic_block_idx = (pa - target_plic_pa) / PMD_SIZE;
 
-                // 1. 取得對應 PTE 表的實體位址
-                unsigned long pte_pa = (unsigned long)plic_pte[plic_block_idx];
-                if (pte_pa >= PAGE_OFFSET) pte_pa -= PAGE_OFFSET;
-                unsigned long *pte_phys = (unsigned long *)pte_pa;
+                unsigned long plic_pte_pa = (unsigned long)plic_pte[plic_block_idx];
+                // PMD entry points to plic_pte
+                pmd[i][j] = MAKE_PTE(plic_pte_pa, PTE_V);
 
-                // 2. 將 PMD entry 指向該 PTE 表 (只需要 PTE_V)
-                pmd_phys[j] = MAKE_PTE(pte_pa, PTE_V);
-
-                // 3. 填寫 PTE 表，將這 2MB 切成 512 個 4KB 頁面
+                // Set PLIC PTE
                 for (int k = 0; k < ENTRIES_PER_TABLE; k++) {
-                    unsigned long page_pa = pa + ((unsigned long)k * PAGE_SIZE);
-                    
-                    // PLIC 的範圍內全都是 MMIO，所以全部設為 Device 權限 (不可執行)
-                    pte_phys[k] = MAKE_PTE(page_pa, PROT_DEVICE);
+                    unsigned long plic_pa = pa + ((unsigned long)k * PAGE_SIZE);
+                    plic_pte[plic_block_idx][k] = MAKE_PTE(plic_pa, PROT_DEVICE);
                 }
             }
+            // If PMD entry is for framebuffer
             else if (pa >= target_fb_pa && pa < target_fb_pa + fb_size) {
-                // 計算這是 Framebuffer 的第幾個 2MB 區塊 (0 ~ 7)
+                // The index of block for framebuffer
                 unsigned long fb_block_idx = (pa - target_fb_pa) / PMD_SIZE;
                 
-                // 取得對應的 PTE 表實體位址
-                unsigned long pte_pa = (unsigned long)fb_pte[fb_block_idx];
-                if (pte_pa >= PAGE_OFFSET) pte_pa -= PAGE_OFFSET;
-                unsigned long *pte_phys = (unsigned long *)pte_pa;
+                unsigned long fb_pte_pa = (unsigned long)fb_pte[fb_block_idx];
+                // PMD entry points to plic_pte
+                pmd[i][j] = MAKE_PTE(fb_pte_pa, PTE_V);
 
-                // PMD 節點指向 PTE 表 (僅 PTE_V)
-                pmd_phys[j] = MAKE_PTE(pte_pa, PTE_V);
-
-                // 將 2MB 切碎成 512 個 4KB 頁面，並設定為 PROT_DEVICE
+                // Set PLIC PTE
                 for (int k = 0; k < ENTRIES_PER_TABLE; k++) {
-                    unsigned long page_pa = pa + ((unsigned long)k * PAGE_SIZE);
-                    pte_phys[k] = MAKE_PTE(page_pa, PROT_DEVICE);
+                    unsigned long fb_pa = pa + ((unsigned long)k * PAGE_SIZE);
+                    fb_pte[fb_block_idx][k] = MAKE_PTE(fb_pa, PROT_DEVICE);
                 }
             }
-            // 一般的 RAM 空間 (維持 2MB 巨型分頁)
+            // If PMD entry is for normal space
             else {
-                pmd_phys[j] = MAKE_PTE(pa, PROT_KERNEL);
+                pmd[i][j] = MAKE_PTE(pa, PROT_KERNEL);
             }
         }
     }
 
-    // 啟動 MMU
+    // Start MMU
+    // sfence.vma vaddr, asid: Flush TLB
+    // vaddr for specific virtual address, 0 means all virtual address
+    // asid for specific address space ID, 0 means all address space ID
     asm volatile(
-        "sfence.vma zero, zero\n"
         "csrw satp, %0\n"
         "sfence.vma zero, zero\n"
         :
@@ -140,60 +121,54 @@ void setup_vm()
     );
 }
 
+// Drop identity mapping
 void drop_identity_map()
 {
-    // TODO: Drop identity mapping
-    // 因為前面 Identity 和 Higher-half 都是共用 pmd 表，
-    // 所以我們只要把 PGD 的低位址 entry 拔掉，就能完美斷開映射！
+    // Only drop lower PGD entry because PMD are share for identity/higher mapping
     for (int i = 0; i < LINEAR_MAP_GIB; i++) {
         unsigned long pa_base = (unsigned long)i * PGD_SIZE;
         pgd[(pa_base >> PGD_SHIFT) & 0x1FF] = 0;
     }
 
-    // 刷新 TLB
     __asm__ volatile("sfence.vma zero, zero" ::: "memory");
 }
 
 
 void pagewalk(unsigned long *user_pgd, unsigned long va, unsigned long pa, unsigned long prot) {
-    unsigned long vpn2 = (va >> 30) & 0x1FF;
-    unsigned long vpn1 = (va >> 21) & 0x1FF;
-    unsigned long vpn0 = (va >> 12) & 0x1FF;
+    unsigned long vpn2 = (va >> PGD_SHIFT) & 0x1FF;
+    unsigned long vpn1 = (va >> PMD_SHIFT) & 0x1FF;
+    unsigned long vpn0 = (va >> PTE_SHIFT) & 0x1FF;
 
-    // 1. 檢查 Level 2 (PGD)
+    // Check PGD
     if (!(user_pgd[vpn2] & PTE_V)) {
-        // 使用你的 allocator 配置一頁 4KB 記憶體 (回傳的是 Virtual Address)
-        void* new_page = allocate(PAGE_SIZE);
-        memset(new_page, 0, PAGE_SIZE); // 務必清空
-
-        // 將 VA 轉為 PA 存入 PTE
-        unsigned long new_page_pa = (unsigned long)new_page - PAGE_OFFSET;
+        void* new_page = allocate(PAGE_SIZE); // allocate a entry for pgd[vpn2]
+        memset(new_page, 0, PAGE_SIZE);
+        unsigned long new_page_pa = (unsigned long)virt_to_phys(new_page);
         user_pgd[vpn2] = MAKE_PTE(new_page_pa, PTE_V);
     }
+    
+    // From PGD get the PMD base address
+    unsigned long pmd_base_pa = (user_pgd[vpn2] >> 10) << 12;
+    unsigned long* pmd_base = (unsigned long*)phys_to_virt(pmd_base_pa);
 
-    // 從 PGD 取得 Level 1 (PMD) 表的 PA，並轉為 VA 供 Kernel 存取
-    unsigned long lvl1_pa = (user_pgd[vpn2] >> 10) << 12;
-    unsigned long* lvl1 = (unsigned long*)(lvl1_pa + PAGE_OFFSET);
-
-    // 2. 檢查 Level 1 (PMD)
-    if (!(lvl1[vpn1] & PTE_V)) {
-        void* new_page = allocate(PAGE_SIZE);
+    // Check PMD
+    if (!(pmd_base[vpn1] & PTE_V)) {
+        void* new_page = allocate(PAGE_SIZE); // allocate a entry for pmd[vpn1]
         memset(new_page, 0, PAGE_SIZE);
-
-        unsigned long new_page_pa = (unsigned long)new_page - PAGE_OFFSET;
-        lvl1[vpn1] = MAKE_PTE(new_page_pa, PTE_V);
+        unsigned long new_page_pa = (unsigned long)virt_to_phys(new_page);
+        pmd_base[vpn1] = MAKE_PTE(new_page_pa, PTE_V);
     }
 
-    // 從 PMD 取得 Level 0 (PTE) 表的 PA，並轉為 VA 供 Kernel 存取
-    unsigned long lvl0_pa = (lvl1[vpn1] >> 10) << 12;
-    unsigned long* lvl0 = (unsigned long*)(lvl0_pa + PAGE_OFFSET);
+    // From PMD get the pte base address
+    unsigned long pte_base_pa = (pmd_base[vpn1] >> 10) << 12;
+    unsigned long* pte_base = (unsigned long*)phys_to_virt(pte_base_pa);
 
-    // 3. 寫入 Level 0 (PTE) 的葉節點
-    lvl0[vpn0] = MAKE_PTE(pa, prot);
+    // Make a pte and place it into page tagle
+    pte_base[vpn0] = MAKE_PTE(pa, prot);
 }
 
 void map_pages(unsigned long *user_pgd, unsigned long va, unsigned long size, unsigned long pa, unsigned long prot) {
-    // 確保對齊 4KB
+    // align to 4KB
     unsigned long end_va = va + size;
     va = va & ~(PAGE_SIZE - 1);
     pa = pa & ~(PAGE_SIZE - 1);
@@ -205,27 +180,29 @@ void map_pages(unsigned long *user_pgd, unsigned long va, unsigned long size, un
     }
 }
 
-// 檢查某個虛擬位址 (va) 在 pgd 中是否有對應的 PTE (Page Table Entry)
-// 如果有，回傳該 PTE 的實體位址 (轉為 Kernel VA 以便讀取)；如果沒有，回傳 NULL
+// Get the physical address of the pte
 unsigned long* get_pte(unsigned long *pgd, unsigned long va) {
-    unsigned long vpn2 = (va >> 30) & 0x1FF;
-    unsigned long vpn1 = (va >> 21) & 0x1FF;
-    unsigned long vpn0 = (va >> 12) & 0x1FF;
+    unsigned long vpn2 = (va >> PGD_SHIFT) & 0x1FF;
+    unsigned long vpn1 = (va >> PMD_SHIFT) & 0x1FF;
+    unsigned long vpn0 = (va >> PTE_SHIFT) & 0x1FF;
 
-    // 檢查第一層 PGD
-    unsigned long pte2 = pgd[vpn2];
-    if (!(pte2 & PTE_V)) return NULL;
+    // Check PGD
+    unsigned long pgd_entry = pgd[vpn2];
+    if (!(pgd_entry & PTE_V))
+        return NULL;
     
-    // 檢查第二層 PMD
-    unsigned long pmd_pa = (pte2 >> 10) << 12;
-    unsigned long *pmd = (unsigned long *)(pmd_pa + PAGE_OFFSET);
-    unsigned long pte1 = pmd[vpn1];
-    if (!(pte1 & PTE_V)) return NULL;
+    // Check PMD
+    unsigned long pmd_base_pa = (pgd_entry >> 10) << 12;
+    unsigned long *pmd_base = (unsigned long *)phys_to_virt(pmd_base_pa);
+    unsigned long pmd_entry = pmd_base[vpn1];
+    if (!(pmd_entry & PTE_V))
+        return NULL;
 
-    // 檢查第三層 PTE
-    unsigned long pte_pa = (pte1 >> 10) << 12;
-    unsigned long *pte = (unsigned long *)(pte_pa + PAGE_OFFSET);
+    // Check PTE
+    unsigned long pte_base_pa = (pmd_entry >> 10) << 12;
+    unsigned long *pte_base = (unsigned long *)phys_to_virt(pte_base_pa);
     
-    if (!(pte[vpn0] & PTE_V)) return NULL;
-    return &pte[vpn0];
+    if (!(pte_base[vpn0] & PTE_V))
+        return NULL;
+    return &pte_base[vpn0];
 }

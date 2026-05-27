@@ -20,7 +20,7 @@
     })
 
 
-// 刷 Cache 邏輯 (完全保留)
+// flush cache
 static void flush_dcache(void* addr, unsigned long len) {
     unsigned long start = (unsigned long)addr & ~(CACHE_BLOCK_SIZE - 1); //align
     __sync_synchronize(); //Memory Barrier

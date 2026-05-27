@@ -50,7 +50,6 @@ struct sbiret sbi_ecall(int ext,
  * with the major number encoded in the next 7 bits. Bit 31 must be 0.
  */
 long sbi_get_spec_version(void) {
-    // TODO: Implement this function
     return sbi_ecall(SBI_EXT_BASE, SBI_EXT_BASE_GET_SPEC_VERSION, 0, 0, 0, 0, 0, 0).value;
 }
 
@@ -61,7 +60,6 @@ long sbi_get_spec_version(void) {
  * Return: 1 or an extension specific nonzero value if yes, 0 otherwise.
  */
 long sbi_probe_extension(int extid) {
-    // TODO: Implement this function
     return sbi_ecall(SBI_EXT_BASE, SBI_EXT_BASE_PROBE_EXT, extid, 0, 0, 0, 0, 0).value;
 }
 

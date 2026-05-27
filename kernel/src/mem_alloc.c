@@ -32,7 +32,7 @@ struct page {
     int val; // 1 is allocable, 0 is used
     int pool_idx; // -1 for buddy system, 0~5 for different chunk size
     int chunk_count; // Record how many chunk is used in this page
-    int ref_count; // 🌟 [新增] COW 實體分頁引用計數器
+    int ref_count; // The count of reference to this physical page frame
 };
 
 // Frame Array
@@ -116,8 +116,7 @@ void init_mem(unsigned long dtb_ptr){
     }
     
     // 1. Kernel 
-    // [FIX] _start 跟 _end 現在是 Virtual Address，必須減掉 PAGE_OFFSET 轉回 Physical Address 記錄
-    add_early_reserve((uint64_t)_start - PAGE_OFFSET, (uint64_t)_end - (uint64_t)_start);
+    add_early_reserve(virt_to_phys((uint64_t)_start), (uint64_t)_end - (uint64_t)_start);
     uart_puts("Kernel address: ");
     uart_hex((uint64_t)_start);
     uart_puts(", size: ");
@@ -125,8 +124,7 @@ void init_mem(unsigned long dtb_ptr){
     uart_putc('\n');
     
     // 2. DTB
-    // [FIX] dtb_ptr 從 main 傳進來時已是 Virtual Address，轉回 PA 記錄
-    add_early_reserve((uint64_t)dtb_ptr - PAGE_OFFSET, bswap32(((const struct fdt_header *)dtb_ptr)->totalsize));
+    add_early_reserve(virt_to_phys((uint64_t)dtb_ptr), bswap32(((const struct fdt_header *)dtb_ptr)->totalsize));
     uart_puts("DTB address: ");
     uart_hex((uint64_t)dtb_ptr);
     uart_puts(", size: ");
@@ -150,7 +148,6 @@ void init_mem(unsigned long dtb_ptr){
             else 
                 initrd_end   = bswap32(*(const uint32_t*)end_prop);
             
-            // DTB 讀出來的 initrd_start 本來就是 PA，所以直接保留即可
             add_early_reserve(initrd_start, initrd_end - initrd_start);
             uart_puts("Initramfs address: ");
             uart_hex(initrd_start);
@@ -162,18 +159,17 @@ void init_mem(unsigned long dtb_ptr){
             uart_puts("There is no initramfs needed to reserve\n");
     }
     
-    // 4. Device Tree /reserved-memory (從 DTB 讀出來的也是 PA，內部邏輯不變)
+    // 4. Device Tree /reserved-memory
     fdt_reserve_memory_nodes(dtb_ptr);
     
     // calculate the size of mem_map and find a safe region to place it
     uint64_t mem_map_size = num_pages * sizeof(struct page);
-    uint64_t safe_base = find_safe_base(mem_map_size); // 這裡找到的是 PA
+    uint64_t safe_base = find_safe_base(mem_map_size);
     
-    // [FIX] C 語言的指標必須指在 Virtual Address，加上 PAGE_OFFSET 以防 Page Fault
-    mem_map = (struct page *)(safe_base + PAGE_OFFSET);
+    mem_map = (struct page *)(phys_to_virt(safe_base));
 
     uart_puts("[Startup Allocator] mem_map placed at: ");
-    uart_hex((uint64_t)mem_map); // 印出 VA 方便檢查
+    uart_hex((uint64_t)mem_map);
     uart_puts(", size: ");
     uart_hex(mem_map_size);
     uart_putc('\n');
@@ -209,7 +205,6 @@ void init_mem(unsigned long dtb_ptr){
     
     uart_puts("--- Start Reserving Memory ---\n");
     uart_puts("Reserve mem_map region: ");
-    // memory_reserve 預期接收 PA，所以傳入 safe_base
     memory_reserve(safe_base, mem_map_size);
     
     // save memory for reserved region
@@ -291,10 +286,9 @@ void fdt_reserve_memory_nodes(unsigned long dtb_ptr) {
     }
 }
 
-// convert page index to address 
-// [FIX] 分配出去的記憶體位址應為 Virtual Address (加上 PAGE_OFFSET)
+// convert page index to virtual address 
 unsigned long page_to_addr(int idx){
-    return mem_start + (uint64_t)idx * PAGE_SIZE + PAGE_OFFSET;
+    return phys_to_virt(mem_start + (uint64_t)idx * PAGE_SIZE);
 }
 
 // get the end page index in the same block
@@ -365,11 +359,10 @@ void free_pages(struct page* p) {
         return;
     }
     
-    // 🌟 [新增] COW 核心攔截：遞減計數器
+    // Others still need this page frame
     p->ref_count--;
-    if (p->ref_count > 0) {
-        return; // 還有其他 Process 在用這塊記憶體，保留它！
-    }
+    if (p->ref_count > 0)
+        return; 
 
     int order = p->order;
     int page_idx = p - mem_map;
@@ -419,7 +412,6 @@ void *kmalloc(unsigned int size) {
         new_page->pool_idx = pool_idx;
         
         int chunk_size = pool_sizes[pool_idx];
-        // page_addr 是 VA，直接對其操作記憶體不會引發 Page Fault
         unsigned long page_addr = page_to_addr(new_page - mem_map);
 
         for (int offset = 0; offset < PAGE_SIZE; offset += chunk_size) {
@@ -431,11 +423,10 @@ void *kmalloc(unsigned int size) {
     struct page *target_chunk = (struct page *)list_front(&chunk_pools[pool_idx]);
     list_remove(&target_chunk->list);
     
-    unsigned long chunk_addr = (unsigned long)target_chunk; // VA
-    unsigned long base_addr = chunk_addr & ~((unsigned long)PAGE_SIZE - 1); // VA
+    unsigned long chunk_addr = (unsigned long)target_chunk;
+    unsigned long base_addr = chunk_addr & ~((unsigned long)PAGE_SIZE - 1);
     
-    // [FIX] base_addr 是 VA，而 mem_start 是 PA。須將 base_addr 減去 PAGE_OFFSET 轉回 PA 才能算出正確的 page_idx
-    int page_idx = ((base_addr - PAGE_OFFSET) - mem_start) / PAGE_SIZE;
+    int page_idx = (virt_to_phys(base_addr) - mem_start) / PAGE_SIZE;
     mem_map[page_idx].chunk_count++;
 
     return (void *)target_chunk;
@@ -448,11 +439,10 @@ void kfree(void *ptr) {
         return;
     }
 
-    unsigned long addr = (unsigned long)ptr; // VA
-    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1); // VA
+    unsigned long addr = (unsigned long)ptr;
+    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1);
     
-    // [FIX] 扣掉 PAGE_OFFSET 算回真實 PA
-    int page_idx = ((base_addr - PAGE_OFFSET) - mem_start) / PAGE_SIZE;
+    int page_idx = (virt_to_phys(base_addr) - mem_start) / PAGE_SIZE;
     struct page *p = &mem_map[page_idx];
     int pool_idx = p->pool_idx;
 
@@ -494,7 +484,7 @@ void *allocate(unsigned int size) {
         struct page *p = alloc_pages(size);
         if (!p)
             return NULL;
-        return (void *)page_to_addr(p - mem_map); // 回傳 VA 供 Kernel 使用
+        return (void *)page_to_addr(p - mem_map);
     }
 }
 
@@ -503,11 +493,10 @@ void free(void *ptr) {
         uart_puts("The point is NULL.\n");
         return;
     }
-    unsigned long addr = (unsigned long)ptr; // VA
-    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1); // VA
+    unsigned long addr = (unsigned long)ptr; 
+    unsigned long base_addr = addr & ~((unsigned long)PAGE_SIZE - 1);
     
-    // [FIX] 計算 Index 時記得將 VA 轉回 PA
-    int page_idx = ((base_addr - PAGE_OFFSET) - mem_start) / PAGE_SIZE;
+    int page_idx = (virt_to_phys(base_addr) - mem_start) / PAGE_SIZE;
     struct page *p = &mem_map[page_idx];
 
     if (p->pool_idx != -1)

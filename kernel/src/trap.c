@@ -43,106 +43,112 @@ void do_trap(struct pt_regs* regs) {
             regs->sepc += 4; // Increment the sepc register by 4 avoid to infinity loop
             syscall_handler(regs);
         }
-        // 🌟 攔截 Page Fault (12: 執行錯誤, 13: 讀取錯誤, 15: 寫入錯誤)
+        // 12: Instruction page fault, 13: Load page fault, 15: Store/AMO page fault
         else if (exception_code == 12 || exception_code == 13 || exception_code == 15) {
             struct task_struct *curr = get_current();
-            unsigned long stval = regs->stval;
-            int handled = 0; // 手術是否成功的標記
+            unsigned long stval = regs->stval; // Get the address where the exception triggers
+            int handled = 0; // Boolean flag for segmentation fault
 
             for (int i = 0; i < MAX_VMAS; i++) {
+                // Check whether this address is in any vmas
                 if (curr->vmas[i].used && stval >= curr->vmas[i].vm_start && stval < curr->vmas[i].vm_end) {
-                    
                     int valid = 1;
-                    if (exception_code == 15 && !(curr->vmas[i].vm_prot & PROT_WRITE)) valid = 0;
-                    if (exception_code == 13 && !(curr->vmas[i].vm_prot & PROT_READ))  valid = 0;
-                    if (exception_code == 12 && !(curr->vmas[i].vm_prot & PROT_EXEC))  valid = 0;
-                    
+                    // Check PROT in the region
+                    if (exception_code == 15 && !(curr->vmas[i].vm_prot & PROT_WRITE))
+                        valid = 0;
+                    if (exception_code == 13 && !(curr->vmas[i].vm_prot & PROT_READ))
+                        valid = 0;
+                    if (exception_code == 12 && !(curr->vmas[i].vm_prot & PROT_EXEC))
+                        valid = 0;
                     
                     if (valid) {
-                        unsigned long fault_page_va = stval & ~(PAGE_SIZE - 1); 
-                        unsigned long *pte = get_pte(curr->pgd, fault_page_va);
-                        
-                        // 🌟🌟🌟 攔截 Copy-on-Write (COW) 🌟🌟🌟
-                        // 檢查這個 PTE 是否存在，並且貼有 COW 標籤 (1 << 8)
+                        unsigned long fault_page_va = stval & ~(PAGE_SIZE - 1); // Align fault address to 4KB
+                        unsigned long *pte = get_pte(curr->pgd, fault_page_va); // Get the pte of this address
+                        // Copy-On-Write
                         if (exception_code == 15 && pte != NULL && (*pte & PTE_V) && (*pte & PTE_COW)) {
                             unsigned long old_pa = (*pte >> 10) << 12;
-                            void *old_page_kernel_va = (void *)(old_pa + PAGE_OFFSET);
+                            void *old_va = (void *)phys_to_virt(old_pa);
                             
-                            int page_refs = get_page_ref(old_pa);
-                            
-                            // 準備新的 PTE 權限：撕掉 COW，恢復 PTE_W
+                            int page_refs = get_page_ref(old_pa); // reference count of this page frame
+                            // Update the permission in this pte
                             unsigned long pte_prot = PROT_USER_BASE;
-                            if (curr->vmas[i].vm_prot & PROT_READ)  pte_prot |= PTE_R;
-                            if (curr->vmas[i].vm_prot & PROT_WRITE) pte_prot |= PTE_W;
-                            if (curr->vmas[i].vm_prot & PROT_EXEC)  pte_prot |= PTE_X;
-
-                            if (page_refs > 1) {
-                                // 情況 A：還有別人在用，Allocate 新 frame 並 Copy data
+                            if (curr->vmas[i].vm_prot & PROT_READ)
+                                pte_prot |= PTE_R;
+                            if (curr->vmas[i].vm_prot & PROT_WRITE)
+                                pte_prot |= PTE_W;
+                            if (curr->vmas[i].vm_prot & PROT_EXEC)
+                                pte_prot |= PTE_X;
+                            
+                            // Other still need this page frame => copy a new page frame
+                            if (page_refs != 1) {
                                 dec_page_ref(old_pa);
                                 void *new_page = allocate(PAGE_SIZE);
                                 if (!new_page) {
                                     uart_puts("[COW] OOM!\n");
                                     thread_exit();
                                 }
-                                memcpy(new_page, old_page_kernel_va, PAGE_SIZE);
+                                memcpy(new_page, old_va, PAGE_SIZE);
                                 
                                 // Update PTE to be writable and point to the new frame
-                                unsigned long new_pa = (unsigned long)new_page - PAGE_OFFSET;
+                                unsigned long new_pa = (unsigned long)virt_to_phys(new_page);
                                 map_pages(curr->pgd, fault_page_va, PAGE_SIZE, new_pa, pte_prot);
                             }
-                            else {
-                                // 情況 B：只剩自己在用，直接 Update PTE to be writable
-                                *pte = ((old_pa >> 12) << 10) | pte_prot;
-                            }
+                            // Only this process needs this page frame => update pte permission directly
+                            else 
+                                *pte = MAKE_PTE(old_pa, pte_prot);
                             
-                            // 🌟 嚴格遵守作業要求：Log the permission fault
                             uart_puts("[Permission fault]: ");
-                            uart_hex(fault_page_va); // 根據你的其他 log，這裡通常預期是對齊的位址 (addr)
-                            uart_puts("\n");
-                            
-                            asm volatile("sfence.vma zero, zero" ::: "memory");
-                            handled = 1;
-                            break;
+                            uart_hex(fault_page_va);
+                            uart_puts("\n");                                            
                         }
-                        // 🌟🌟🌟 COW 攔截結束 🌟🌟🌟
-
-                        // ==========================================
-                        // Demand Paging 邏輯
-                        // ==========================================
-                        void *new_page = allocate(PAGE_SIZE);
-                        if (new_page) {
-                            memset(new_page, 0, PAGE_SIZE); 
-                            
-                            if (curr->vmas[i].vm_start == USER_CODE_VA && curr->cpio_addr != 0) {
-                                unsigned long offset = fault_page_va - USER_CODE_VA;
-                                if (offset < curr->code_size) {
-                                    unsigned long copy_size = curr->code_size - offset;
-                                    if (copy_size > PAGE_SIZE) copy_size = PAGE_SIZE;
-                                    memcpy(new_page, (void *)(curr->cpio_addr + offset), copy_size);
+                        // Not Copy-On-Write
+                        else {
+                            void *new_page = allocate(PAGE_SIZE);
+                            if (new_page) {
+                                memset(new_page, 0, PAGE_SIZE); 
+                                // Check if the page fault is for code text, copy the specific page
+                                if (curr->vmas[i].vm_start == USER_CODE_VA && curr->cpio_addr != 0) {
+                                    unsigned long offset = fault_page_va - USER_CODE_VA;
+                                    // avoid over code text
+                                    if (offset < curr->code_size) { 
+                                        unsigned long copy_size = curr->code_size - offset; // avoid copy the last page of code text
+                                        if (copy_size > PAGE_SIZE)
+                                            copy_size = PAGE_SIZE;
+                                        memcpy(new_page, (void *)(curr->cpio_addr + offset), copy_size);
+                                    }
                                 }
+                                
+                                uart_puts("[Translation fault]: ");
+                                uart_hex(fault_page_va); 
+                                uart_puts("\n");
+
+                                unsigned long pte_prot = PROT_USER_BASE;
+                                if (curr->vmas[i].vm_prot & PROT_READ)
+                                    pte_prot |= PTE_R;
+                                if (curr->vmas[i].vm_prot & PROT_WRITE) 
+                                    pte_prot |= PTE_W;
+                                if (curr->vmas[i].vm_prot & PROT_EXEC)
+                                    pte_prot |= PTE_X;
+                                
+                                // Make a pte for the new-allocated frame
+                                unsigned long page_pa = (unsigned long)virt_to_phys(new_page);
+                                map_pages(curr->pgd, fault_page_va, PAGE_SIZE, page_pa, pte_prot);
+
+                                asm volatile("sfence.vma zero, zero" ::: "memory");
+                                handled = 1; 
                             }
-                            
-                            uart_puts("[Translation fault]: ");
-                            uart_hex(fault_page_va); 
-                            uart_puts("\n");
-
-                            unsigned long pte_prot = PROT_USER_BASE;
-                            if (curr->vmas[i].vm_prot & PROT_READ)  pte_prot |= PTE_R;
-                            if (curr->vmas[i].vm_prot & PROT_WRITE) pte_prot |= PTE_W;
-                            if (curr->vmas[i].vm_prot & PROT_EXEC)  pte_prot |= PTE_X;
-
-                            unsigned long page_pa = (unsigned long)new_page - PAGE_OFFSET;
-                            map_pages(curr->pgd, fault_page_va, PAGE_SIZE, page_pa, pte_prot);
-
-                            asm volatile("sfence.vma zero, zero" ::: "memory");
-                            handled = 1; 
-                            break;
+                            else {
+                                uart_puts("[Translation] OOM!\n");
+                                thread_exit();
+                            }
                         }
+                        asm volatile("sfence.vma zero, zero" ::: "memory");
+                        handled = 1;
                     }
+                    break;
                 }
             }
-
-            // 🌟 嚴格遵守作業要求：Generate a segmentation fault and terminate
+            // Segmentation fault and terminate the thread
             if (!handled) {
                 uart_puts("[Segmentation fault]: Kill Process\n");
                 uart_puts("Invalid memory access at ");

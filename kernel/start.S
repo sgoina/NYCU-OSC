@@ -1,31 +1,21 @@
 .section ".text.boot"
 .global _start
-.global relocate
-
-.equ RELOC_DEST, 0x20000000
 
 _start:
-    // TODO: Jump to high address
-    // 1. Load early stack pointer (PA)
-    // 此時 PC 在物理位址，la 指令基於 PC 計算，算出的 sp 自然就是物理位址！
-    // 根據 link.ld，_end 已經預留了 0x4000 (16KB) 的空間，直接指定即可。
+    // Load early stack pointer (physical address)
+    // la: Load PC-relative address. PC is physical address now.
     la      sp, _end
-
-    // 2. Call setup_vm
     call    setup_vm
 
-    // 3. Jump to high VA
-    // la 取得的是標籤 1 的物理位址，我們必須手動加上 PAGE_OFFSET 轉為 VA
-    la      t0, 1f
+    // Calculate the virtual address of Label 1, and jump to Label 1 (virtual address)
+    la      t0, 1f /* f (forward): Find the first Label 1 after this line */
     li      t1, 0xffffffc000000000
     add     t0, t0, t1
     jr      t0
 
 .align 2
 1:
-    // TODO: load virtual address of sp
-    // The linker script assigns _end as a high virtual address. 
-    // We can directly load it to initialize the stack pointer.
+    // Load virtual address of sp, PC is virtual address now.
     la      sp, _end
     
     la t0, __bss_start
@@ -37,7 +27,7 @@ clear_bss_loop:
     blt t0, t1, clear_bss_loop
 
 clear_bss_done:
-    call drop_identity_map
+    call drop_identity_map /* Remove identity mapping */
     la a2, handle_exception
     csrw stvec, a2
     la sp, _end

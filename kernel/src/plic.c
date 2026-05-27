@@ -41,7 +41,7 @@ void plic_init(unsigned long dtb_ptr) {
         uint64_t base_high = bswap32(reg[0]);
         uint64_t base_low  = bswap32(reg[1]);
         plic_base = (base_high << 32) | base_low;
-        plic_base += PAGE_OFFSET;
+        plic_base = phys_to_virt(plic_base);
     }
     else
         return;

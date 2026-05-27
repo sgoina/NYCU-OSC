@@ -83,18 +83,13 @@ void start_kernel_shell(){
             char *f = buffer + 5; // skip "exec "
             if (*f != '\0') {
                 unsigned int filesize = 0;
-    
-                // 呼叫新版的 find_program，傳入 &filesize 來接收大小
                 void* prog_va = find_program(f, &filesize);
                 
                 if (prog_va != NULL) { 
-                    // 呼叫新版的 user_process_create
                     struct task_struct* child_task = user_process_create(filesize, prog_va);
                     
-                    if (child_task != NULL) {
-                        // wait user process
-                        thread_wait(child_task->pid);
-                    }
+                    if (child_task != NULL) 
+                        thread_wait(child_task->pid); // wait user process
                     else
                         uart_puts("Failed to create user process!\n");
                 }
