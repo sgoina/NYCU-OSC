@@ -53,8 +53,7 @@ int initrd_addr(unsigned long dtb_ptr){
                 uint64_t low = bswap32(rd_start[1]);
                 cpio_pa = (high << 32) | low;
             }
-            // 算好實體位址後，加上 PAGE_OFFSET 轉為虛擬位址，再存入指標
-            cpio_address = (void *)(cpio_pa + PAGE_OFFSET);
+            cpio_address = (void *)phys_to_virt(cpio_pa); // convert to virtual address
         }
     }
     else
@@ -142,6 +141,7 @@ void cat_file_content(const char* filename) {
     return;
 }
 
+// After lab 5, no longer use
 int exec(const char *filename){
     char *ptr = (char *)cpio_address;
     while (strncmp(ptr + sizeof(struct cpio_t), "TRAILER!!!", 10)) {

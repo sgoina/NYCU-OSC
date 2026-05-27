@@ -33,6 +33,9 @@
 #define PTE_G  (1UL << 5)
 #define PTE_A  (1UL << 6)
 #define PTE_D  (1UL << 7)
+// 🌟 定義 COW 的標籤 (通常使用 PTE 結構中保留給 OS 軟體使用的 bit)
+// 在 RISC-V 中，bit 8 (RSW) 很適合拿來標記 COW
+#define PTE_COW (1 << 8)
 
 #define PROT_KERNEL  (PTE_V | PTE_R | PTE_W | PTE_X | PTE_G | PTE_A | PTE_D)
 #define PROT_DEVICE  (PTE_V | PTE_R | PTE_W | PTE_G | PTE_A | PTE_D)
@@ -52,8 +55,10 @@
 
 #define SATP_SV39           (8UL << 60)
 #define MAKE_SATP(pgd_pa)   (SATP_SV39 | ((unsigned long)(pgd_pa) >> 12))
-
 #define MAKE_PTE(pa, flags) ((((unsigned long)(pa)) >> 12) << 10 | (flags))
+
+#define phys_to_virt(pa)    (pa + PAGE_OFFSET)
+#define virt_to_phys(va)    (va - PAGE_OFFSET)
 
 void setup_vm();
 

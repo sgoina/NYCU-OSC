@@ -224,7 +224,7 @@ int sys_kill(int pid, int signum) {
 }
 
 // 13: mmap
-long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
+void* sys_mmap(void *addr, unsigned long length, int prot, int flags) {
     struct task_struct *curr = get_current();
     unsigned long aligned_len = align(length, PAGE_SIZE); // 向上對齊 4KB
     unsigned long target_addr = (unsigned long)addr;
@@ -246,7 +246,7 @@ long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
         target_addr = find_free_vma_region(curr, aligned_len);
     }
 
-    if (target_addr == 0) return -1; // Out of memory
+    if (target_addr == 0) return (void*)-1; // Out of memory
 
     // 3. 登記到 VMA 結構中 (記帳)
     int vma_idx = -1;
@@ -261,7 +261,7 @@ long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
             break;
         }
     }
-    if (vma_idx == -1) return -1; // VMA 滿了
+    if (vma_idx == -1) return (void*)-1; // VMA 滿了
 
     // 4. 轉換 PROT 到 PTE 權限
     unsigned long pte_prot = PROT_USER_BASE; 
@@ -274,7 +274,7 @@ long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
         // 立刻分配並映射 (Advanced 1 模式)
         for (unsigned long va = target_addr; va < target_addr + aligned_len; va += PAGE_SIZE) {
             void *new_page = allocate(PAGE_SIZE); 
-            if (!new_page) return -1;
+            if (!new_page) return (void*)-1;
             memset(new_page, 0, PAGE_SIZE);       
             
             unsigned long page_pa = (unsigned long)new_page - PAGE_OFFSET;
@@ -283,42 +283,42 @@ long sys_mmap(void *addr, unsigned long length, int prot, int flags) {
         asm volatile("sfence.vma zero, zero" ::: "memory");
     } 
 
-    return target_addr; // 發放空虛擬位址鑰匙給 User
+    return (void*)target_addr; // 發放空虛擬位址鑰匙給 User
 }
 
 void syscall_handler(struct pt_regs *regs) {
     // a7 stores system call number
     unsigned long syscall_num = regs->a7;
     
-    long ret = -1;
+    void* ret = (void*)-1;
 
     switch (syscall_num) {
         case 0: // getpid
-            ret = sys_getpid();
+            ret = (void*)sys_getpid();
             break;
             
         case 1: // uart_read
             // a0 = *buf, a1 = count
-            ret = sys_uart_read((char*)regs->a0, regs->a1);
+            ret = (void*)sys_uart_read((char*)regs->a0, regs->a1);
             break;
             
         case 2: // uart_write
             // a0 = *buf, a1 = count
-            ret = sys_uart_write((const char*)regs->a0, regs->a1);
+            ret = (void*)sys_uart_write((const char*)regs->a0, regs->a1);
             break;
             
         case 3: // exec
             // a0 = *path
-            ret = sys_exec((const char*)regs->a0, regs);
+            ret = (void*)sys_exec((const char*)regs->a0, regs);
             break;
             
         case 4: // fork
-            ret = sys_fork(regs);
+            ret = (void*)sys_fork(regs);
             break;
             
         case 5: // waitpid
             // a0 = pid
-            ret = sys_waitpid(regs->a0);
+            ret = (void*)sys_waitpid(regs->a0);
             break;
             
         case 6: // exit
@@ -328,7 +328,7 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 7: // stop
             // a0 = pid
-            ret = sys_stop(regs->a0);
+            ret = (void*)(long)sys_stop(regs->a0);
             break;
             
         case 8: // display
@@ -338,12 +338,12 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 9: // usleep
             // a0 = usec
-            ret = sys_usleep((unsigned int)regs->a0);
+            ret = (void*)(long)sys_usleep((unsigned int)regs->a0);
             break;
             
         case 10: // signal
             // a0 = signum, a1 = *handler
-            ret = sys_signal((int)regs->a0, (void *)regs->a1); // ret value ignored
+            ret = (void*)sys_signal((int)regs->a0, (void *)regs->a1); // ret value ignored
             break;
                         
         case 11: // sigreturn
@@ -352,11 +352,11 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 12: // kill
             // a0 = pid, a1 = signum
-            ret = sys_kill((int)regs->a0, (int)regs->a1); 
+            ret = (void*)(long)sys_kill((int)regs->a0, (int)regs->a1); 
             break;
         case 13: // mmap
             // a0 = addr, a1 = length, a2 = prot, a3 = flags
-            ret = sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
+            ret = (void*)sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
             break;
             
         default:

@@ -18,16 +18,16 @@ unsigned long boot_dtb_ptr;
 
 void irq_enable(){
     // The 2nd bit of sstatus => SIE (Supervisor Interrupt Enable)
-    // The 18th bit of sstatus => SUM (Permit Supervisor User Memory access)
+    // The 19th bit of sstatus => SUM (permit Supervisor User Memory access) if 0, supervisor mode can't access user virtual memory
     unsigned long sstatus;
     asm volatile("csrr %0, sstatus" : "=r"(sstatus));
     sstatus |= (1 << 1); 
-    sstatus |= (1 << 18); // 允許 S-Mode 讀取 U-Mode 記憶體 (解掉 Load Page Fault)
+    sstatus |= (1 << 18);
     asm volatile("csrw sstatus, %0" : : "r"(sstatus));
 }
 
 void start_main(unsigned long hartid, unsigned long dtb_ptr) {
-    dtb_ptr += PAGE_OFFSET;
+    dtb_ptr = phys_to_virt(dtb_ptr);
     boot_cpu_hartid = hartid;
     boot_dtb_ptr = dtb_ptr;
     

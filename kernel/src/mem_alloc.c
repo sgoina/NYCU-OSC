@@ -32,6 +32,7 @@ struct page {
     int val; // 1 is allocable, 0 is used
     int pool_idx; // -1 for buddy system, 0~5 for different chunk size
     int chunk_count; // Record how many chunk is used in this page
+    int ref_count; // 🌟 [新增] COW 實體分頁引用計數器
 };
 
 // Frame Array
@@ -193,6 +194,7 @@ void init_mem(unsigned long dtb_ptr){
         mem_map[i].order = -1;
         mem_map[i].pool_idx = -1;
         mem_map[i].chunk_count = 0;
+        mem_map[i].ref_count = 0;
         INIT_LIST_HEAD(&mem_map[i].list);
     }
 
@@ -347,6 +349,7 @@ struct page* alloc_pages(unsigned int size) {
 
     target_page->val = 0;
     target_page->order = order;
+    target_page->ref_count = 1;
     
     return target_page;
 }
@@ -360,6 +363,12 @@ void free_pages(struct page* p) {
     if (p->val != 0){
         uart_puts("This page isn't a head of block or not allocated.\n");
         return;
+    }
+    
+    // 🌟 [新增] COW 核心攔截：遞減計數器
+    p->ref_count--;
+    if (p->ref_count > 0) {
+        return; // 還有其他 Process 在用這塊記憶體，保留它！
     }
 
     int order = p->order;
@@ -507,17 +516,7 @@ void free(void *ptr) {
         free_pages(p);
 }
 
-void show_mem_alloc() {
-    for (int i = MAX_ORDER; i >= 0; i--){
-        uart_puts("free_area[");
-        uart_dec(i);
-        uart_puts("] ");
-        uart_dec(list_size(&free_area[i]));
-        uart_putc('\n');
-    }
-}
 
-// 注意：此處 start 與 size 為硬體實體位址 PA
 void memory_reserve(unsigned long long start, unsigned long long size) {
     if (size == 0)
         return;
@@ -541,7 +540,6 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
         uart_puts(".\n");
         res_end = mem_end;
     }
-    // 這裡都是純粹的實體位址運算，不會引發問題
     int start_pfn = (res_start - mem_start) / PAGE_SIZE;
     int end_pfn = (res_end - mem_start + PAGE_SIZE - 1) / PAGE_SIZE;
 
@@ -582,6 +580,42 @@ void memory_reserve(unsigned long long start, unsigned long long size) {
             
             curr = next_node;
         }
+    }
+}
+
+// increase the count of page reference 
+void inc_page_ref(unsigned long pa) {
+    // check valid physical address
+    if (pa >= mem_start && pa < mem_end) {
+        int page_idx = (pa - mem_start) / PAGE_SIZE;
+        mem_map[page_idx].ref_count++;
+    }
+}
+
+// decrease the count of page reference 
+void dec_page_ref(unsigned long pa) {
+    if (pa >= mem_start && pa < mem_end) {
+        int page_idx = (pa - mem_start) / PAGE_SIZE;
+        mem_map[page_idx].ref_count--;
+    }
+}
+
+// get the count of page reference 
+int get_page_ref(unsigned long pa) {
+    if (pa >= mem_start && pa < mem_end) {
+        int page_idx = (pa - mem_start) / PAGE_SIZE;
+        return mem_map[page_idx].ref_count;
+    }
+    return 0;
+}
+
+void show_mem_alloc() {
+    for (int i = MAX_ORDER; i >= 0; i--){
+        uart_puts("free_area[");
+        uart_dec(i);
+        uart_puts("] ");
+        uart_dec(list_size(&free_area[i]));
+        uart_putc('\n');
     }
 }
 

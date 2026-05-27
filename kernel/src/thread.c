@@ -202,6 +202,7 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     task->vmas[0].vm_start = USER_CODE_VA;
     task->vmas[0].vm_end   = USER_CODE_VA + aligned_filesize;
     task->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
+    task->vmas[0].vm_flags  = MAP_ANONYMOUS;
     task->vmas[0].used     = 1;
 
     // 註冊 Stack 區塊 (VMA 1)
@@ -211,6 +212,7 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     task->vmas[1].vm_start = stack_top - stack_vma_size;
     task->vmas[1].vm_end   = stack_top;
     task->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
+    task->vmas[1].vm_flags  = MAP_ANONYMOUS;
     task->vmas[1].used     = 1;
 
     // 其餘 VMA 清空
@@ -293,59 +295,57 @@ long fork_process(struct pt_regs *regs) {
         child->pgd[i] = pgd[i];
     }
 
-    // 🌟 統一天下：使用 VMA 進行 Page-by-Page 的拷貝
-    // 這段迴圈會自動幫你處理 Code (vmas[0]), Stack (vmas[1]), 以及所有的 mmap！
+    // 🌟 COW 版本的 VMA 迴圈
     for (int i = 0; i < MAX_VMAS; i++) {
-        child->vmas[i] = parent->vmas[i]; // 複製帳本
+        child->vmas[i] = parent->vmas[i]; 
 
         if (child->vmas[i].used) {
-            // 🌟🌟🌟 實現你的想法：Code 區塊不複製實體記憶體！🌟🌟🌟
-            // 因為程式碼是唯讀的，我們讓 Child 保持 Page Table 空白。
-            // 等 Child 執行到這裡時，會觸發 Instruction Page Fault，
-            // 透過你寫好的 do_trap，從 child->cpio_addr 重新載入，完美達成 Demand Paging！
+            
+            // 你的絕妙點子保留：Code 區塊本身就是唯讀的，維持 Demand Paging 不共享實體。
             if (child->vmas[i].vm_start == USER_CODE_VA) {
-                continue; // 直接跳過實體記憶體拷貝！
+                continue; 
             }
 
             unsigned long start = child->vmas[i].vm_start;
             unsigned long end = child->vmas[i].vm_end;
             
-            // 每次前進 4KB (一頁)，負責拷貝 Stack 或是 Mmap 出來的可寫入記憶體
             for (unsigned long va = start; va < end; va += PAGE_SIZE) {
                 
                 // 1. 偷看 Parent 的 Page Table
                 unsigned long *pte = get_pte(parent->pgd, va);
                 
-                // 如果 PTE 存在且有效 (代表 Parent 真的有這塊實體記憶體)
                 if (pte != NULL && (*pte & PTE_V)) {
                     
-                    // 2. 幫 Child 配置一塊新的實體記憶體
-                    void *child_page = allocate(PAGE_SIZE);
-                    if (!child_page) return -1; // OOM
-
-                    // 3. 安全拷貝資料：
-                    // 為了避免 Kernel 去讀 User VA (va) 觸發 SUM 保護機制，
-                    // 我們直接從 PTE 算出 Parent 的實體位址，並轉為 Kernel 可以讀的位址。
+                    // 🌟 2. 不再 Allocate，直接抽出實體位址！
                     unsigned long parent_pa = (*pte >> 10) << 12;
-                    void *parent_kernel_va = (void *)(parent_pa + PAGE_OFFSET);
                     
-                    memcpy(child_page, parent_kernel_va, PAGE_SIZE);
+                    // 🌟 3. 將這個實體分頁的引用次數 +1
+                    inc_page_ref(parent_pa);
 
-                    // 4. 將權限轉為 PTE 格式並映射到 Child 的 Page Table
-                    unsigned long child_pa = (unsigned long)child_page - PAGE_OFFSET;
+                    // 🌟 4. 製作共享的 PTE 權限
+                    // 拔掉「可寫入(PTE_W)」，貼上「這是一塊 COW 記憶體(PTE_COW)」的標籤
+                    unsigned long shared_pte_prot = PROT_USER_BASE; 
+                    if (child->vmas[i].vm_prot & PROT_READ)  shared_pte_prot |= PTE_R;
+                    if (child->vmas[i].vm_prot & PROT_EXEC)  shared_pte_prot |= PTE_X;
                     
-                    unsigned long pte_prot = PROT_USER_BASE; 
-                    if (child->vmas[i].vm_prot & PROT_READ)  pte_prot |= PTE_R;
-                    if (child->vmas[i].vm_prot & PROT_WRITE) pte_prot |= PTE_W;
-                    if (child->vmas[i].vm_prot & PROT_EXEC)  pte_prot |= PTE_X;
-                    
-                    map_pages(child->pgd, va, PAGE_SIZE, child_pa, pte_prot);
+                    // 💡 如果 VMA 本來就允許寫入，我們才貼上 COW 標籤，並拔掉硬體 W 權限
+                    if (child->vmas[i].vm_prot & PROT_WRITE) shared_pte_prot |= PTE_COW; // 貼上 RSW 標籤
+  
+
+                    // 🌟 5. 將 Child 的 Page Table 指向這個實體位址
+                    map_pages(child->pgd, va, PAGE_SIZE, parent_pa, shared_pte_prot);
+
+                    // 🌟 6. 必須同步修改 Parent 的 Page Table！
+                    // 把 Parent 也變成唯讀並貼上 COW 標籤，否則 Parent 寫入時就不會複製了
+                    // 這裡我們直接覆蓋 Parent 的 PTE
+                    *pte = ((parent_pa >> 12) << 10) | shared_pte_prot;
                 }
-                // 💡 如果 pte 為 NULL，代表 Parent 還沒觸發過 Demand Paging
-                // 我們就什麼都不做，完美跳過這個未爆彈！
             }
         }
     }
+
+    // 🌟 因為我們修改了 Parent 的 Page Table，必須刷新 Parent 的 TLB！
+    asm volatile("sfence.vma zero, zero" ::: "memory");
 
     child->user_stack = 0;
     // 讓 Child 知道自己如果踩空了 Code 區塊，該去哪裡討救兵

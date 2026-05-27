@@ -16,6 +16,12 @@ void *allocate(unsigned int size);
 
 void free(void *ptr);
 
+void inc_page_ref(unsigned long pa);
+
+void dec_page_ref(unsigned long pa);
+
+int get_page_ref(unsigned long pa);
+
 void show_mem_alloc();
 
 void alloc_test();

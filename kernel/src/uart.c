@@ -30,7 +30,7 @@ void uart_init(unsigned long dtb_ptr) {
         uint64_t base_high = bswap32(reg[0]);
         uint64_t base_low  = bswap32(reg[1]);
         uart_base_addr = (base_high << 32) | base_low;
-        uart_base_addr += PAGE_OFFSET;
+        uart_base_addr = phys_to_virt(uart_base_addr); // convert to virtual address
     }
     else
         return;
