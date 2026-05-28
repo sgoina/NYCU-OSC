@@ -204,12 +204,12 @@ void init_mem(unsigned long dtb_ptr){
     }
     
     uart_puts("--- Start Reserving Memory ---\n");
-    uart_puts("Reserve mem_map region: ");
+    //uart_puts("Reserve mem_map region: ");
     memory_reserve(safe_base, mem_map_size);
     
     // save memory for reserved region
     for (int i = 0; i < num_early_reserved; i++) {
-        uart_puts("Reserve recorded region: ");
+        //uart_puts("Reserve recorded region: ");
         memory_reserve(early_reserved[i].start, early_reserved[i].end - early_reserved[i].start);
     }
     show_mem_alloc();

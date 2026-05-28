@@ -1,5 +1,6 @@
 #define PAGE_OFFSET   0xffffffc000000000UL
 
+#define RAM_UPPER_BOUND 0x0000000080000000UL
 #define USER_CODE_VA  0x0000000000000000UL
 #define USER_STACK_VA 0x0000003ffff00000UL // Stack lowest address
 #define USER_SP_VA    0x0000004000000000UL // Initial SP
@@ -49,8 +50,8 @@
 #define MAKE_SATP(pgd_pa)   (SATP_SV39 | ((unsigned long)(pgd_pa) >> 12))
 #define MAKE_PTE(pa, flags) ((((unsigned long)(pa)) >> 12) << 10 | (flags))
 
-#define phys_to_virt(pa)    (pa + PAGE_OFFSET)
-#define virt_to_phys(va)    (va - PAGE_OFFSET)
+#define phys_to_virt(pa)    ((pa) + PAGE_OFFSET)
+#define virt_to_phys(va)    ((va) - PAGE_OFFSET)
 
 void setup_vm();
 
@@ -59,3 +60,5 @@ void drop_identity_map();
 void map_pages(unsigned long *user_pgd, unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
 
 unsigned long* get_pte(unsigned long *pgd, unsigned long va);
+
+void free_page_tables(unsigned long *pgd);

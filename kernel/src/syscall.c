@@ -63,7 +63,7 @@ long sys_exec(const char *path, struct pt_regs *regs) {
     
     // update process pgd
     if (current->pgd != NULL)
-        free(current->pgd);
+        free_page_tables(current->pgd);
     current->pgd = new_pgd;
         
     current->cpio_addr = (unsigned long)cpio_code_addr;
@@ -72,29 +72,38 @@ long sys_exec(const char *path, struct pt_regs *regs) {
     current->user_stack = 0; 
     current->user_sp = USER_SP_VA; 
     
-    regs->sepc = USER_CODE_VA;
-    regs->sp = USER_SP_VA;
+    current->pending_signals = 0;
+    current->is_handling_signal = 0;
+    if (current->signal_stack)
+        free((void*)current->signal_stack);
+    current->signal_stack = 0;
+    for(int i = 0; i < MAX_SIGNALS; i++){
+        current->signal_handlers[i] = 0;
+    }
     
     // record vmas for code and user stack
     current->vmas[0].vm_start = USER_CODE_VA;
     current->vmas[0].vm_end   = USER_CODE_VA + aligned_filesize;
-    current->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
+    current->vmas[0].vm_prot  = PROT_READ | PROT_EXEC;
+    current->vmas[0].vm_flags = MAP_ANONYMOUS;
     current->vmas[0].used     = 1;
 
-    unsigned long stack_vma_size = 20 * PAGE_SIZE; 
-
-    current->vmas[1].vm_start = USER_SP_VA - stack_vma_size;
+    current->vmas[1].vm_start = USER_STACK_VA;
     current->vmas[1].vm_end   = USER_SP_VA;
     current->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
+    current->vmas[1].vm_flags = MAP_ANONYMOUS;
     current->vmas[1].used     = 1;
 
     // clear the info of other regions
     for (int i = 2; i < MAX_VMAS; i++) {
         current->vmas[i].used = 0;
     }
+    
+    regs->sepc = USER_CODE_VA;
+    regs->sp = USER_SP_VA;
 
     // Update pgd and flush TLB, ready to go to new process
-    unsigned long pgd_pa = (unsigned long)virt_to_phys(new_pgd);
+    unsigned long pgd_pa = virt_to_phys((unsigned long)new_pgd);
     asm volatile(
         "csrw satp, %0\n"
         "sfence.vma zero, zero\n"
@@ -180,6 +189,17 @@ void sys_sigreturn(struct pt_regs *regs) {
         free((void *)curr->signal_stack);
         curr->signal_stack = 0;
     }
+    // update vmas
+    for (int i = 0; i < MAX_VMAS; i++) {
+        if (!curr->vmas[i].used && curr->vmas[i].vm_start == USER_SIG_STACK_VA) { 
+            curr->vmas[i].used = 0;
+            break;
+        }
+    }
+    // Clear the pte about signal_stack
+    unsigned long *pte = get_pte(curr->pgd, USER_SIG_STACK_VA);
+    if (pte != NULL)
+        *pte = 0;
 
     // Return back original regs
     char *src = (char *)&curr->signal_saved_context;

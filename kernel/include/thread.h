@@ -9,7 +9,7 @@
 // Maximum number of signal
 #define MAX_SIGNALS 64
 // Maximum number of memory regions
-#define MAX_VMAS 16
+#define MAX_VMAS 256
 
 struct vm_area_struct {
     unsigned long vm_start; 
@@ -28,11 +28,11 @@ struct task_struct {
     int pid;
     int state;
     void (*entry_point)(); // for kernel thread
+    struct task_struct* next;
     unsigned long kernel_sp; // the highest address in kernel stack
     unsigned long user_sp; // the highest address in user stack
-    struct task_struct* next;
     unsigned long kernel_stack;
-    unsigned long user_stack;
+    unsigned long user_stack; // After Lab 6 (Demand paging), no use
     unsigned long signal_stack;
     unsigned long pending_signals; // Pending Signals (bit mask)
     int is_handling_signal;// Is Handling Signal (boolean)

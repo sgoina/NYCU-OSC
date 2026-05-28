@@ -103,7 +103,10 @@ void setup_vm()
             }
             // If PMD entry is for normal space
             else {
-                pmd[i][j] = MAKE_PTE(pa, PROT_KERNEL);
+                if (pa < RAM_UPPER_BOUND)
+                    pmd[i][j] = MAKE_PTE(pa, PROT_KERNEL);
+                else 
+                    pmd[i][j] = MAKE_PTE(pa, PROT_DEVICE);
             }
         }
     }
@@ -130,7 +133,7 @@ void drop_identity_map()
         pgd[(pa_base >> PGD_SHIFT) & 0x1FF] = 0;
     }
 
-    __asm__ volatile("sfence.vma zero, zero" ::: "memory");
+    asm volatile("sfence.vma zero, zero" ::: "memory");
 }
 
 
@@ -205,4 +208,30 @@ unsigned long* get_pte(unsigned long *pgd, unsigned long va) {
     if (!(pte_base[vpn0] & PTE_V))
         return NULL;
     return &pte_base[vpn0];
+}
+
+// Free User page table
+void free_page_tables(unsigned long *pgd) {
+    if (!pgd)
+        return;
+    // 256 ~ 512 are kernel space, not to free
+    for (int i = 0; i < 256; i++) {
+        if (pgd[i] & PTE_V) {
+            unsigned long *pmd = (unsigned long *)phys_to_virt((pgd[i] >> 10) << 12); // Get pmd base address
+            for (int j = 0; j < ENTRIES_PER_TABLE; j++) {
+                if (pmd[j] & PTE_V) {
+                    unsigned long *pte = (unsigned long *)phys_to_virt((pmd[j] >> 10) << 12); // Get pte base address
+                    for (int k = 0; k < ENTRIES_PER_TABLE; k++) {
+                        if (pte[k] & PTE_V) {
+                            unsigned long pa = (pte[k] >> 10) << 12;
+                            free((void *)phys_to_virt(pa));
+                        }
+                    }
+                    free((void *)pte);
+                }
+            }
+            free((void *)pmd);
+        }
+    }
+    free((void *)pgd);
 }

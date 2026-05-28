@@ -122,17 +122,14 @@ struct task_struct* thread_create(void (*threadfn)()) {
     // Need enalbe interrupt because schedule() will disable before switch_to()
     task->thread.ra = (unsigned long)kernel_thread_wrapper;
     // The function of kernel thread
-    task->entry_point = threadfn;
     task->pid = nr_threads++;
     task->state = TASK_RUNNING;
+    task->next = NULL;
+    task->entry_point = threadfn;
     task->kernel_stack = (unsigned long)allocate(PAGE_SIZE);
     task->kernel_sp = task->kernel_stack + PAGE_SIZE;
     task->user_stack = 0; // because this thread is kernel thread
-    task->thread.sp = task->kernel_sp;
-    task->pgd = pgd; // satp in kernel thread is same
-    task->cpio_addr = 0;
-    task->code_size = 0;
-    
+    task->user_sp = 0;
     // initialize signal-related info
     task->signal_stack = 0;
     task->pending_signals = 0;
@@ -140,6 +137,11 @@ struct task_struct* thread_create(void (*threadfn)()) {
     for(int i = 0; i < MAX_SIGNALS; i++){
         task->signal_handlers[i] = 0;
     }
+    
+    task->thread.sp = task->kernel_sp;
+    task->pgd = pgd; // satp in kernel thread is same
+    task->cpio_addr = 0; // Kenerl image program isn't in CPIO
+    task->code_size = 0;
     
     for (int i = 0; i < MAX_VMAS; i++) {
         task->vmas[i].used = 0;
@@ -158,6 +160,8 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     }
     task->pid = nr_threads++;
     task->state = TASK_RUNNING;
+    task->next = NULL;
+    task->entry_point = NULL;
     
     task->kernel_stack = (unsigned long)allocate(PAGE_SIZE); 
     task->kernel_sp = task->kernel_stack + PAGE_SIZE;
@@ -189,10 +193,8 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     task->vmas[0].vm_prot  = PROT_READ | PROT_EXEC | PROT_WRITE;
     task->vmas[0].vm_flags  = MAP_ANONYMOUS;
     task->vmas[0].used     = 1;
-
-    unsigned long stack_vma_size = 20 * PAGE_SIZE; 
     
-    task->vmas[1].vm_start = USER_SP_VA - stack_vma_size;
+    task->vmas[1].vm_start = USER_STACK_VA;
     task->vmas[1].vm_end   = USER_SP_VA;
     task->vmas[1].vm_prot  = PROT_READ | PROT_WRITE;
     task->vmas[1].vm_flags  = MAP_ANONYMOUS;
@@ -239,9 +241,13 @@ long fork_process(struct pt_regs *regs) {
 
     child->pid = nr_threads++;
     child->state = TASK_RUNNING;
+    child->next = NULL;
+    child->entry_point = NULL;
     
     child->kernel_stack = (unsigned long)allocate(PAGE_SIZE); 
     child->kernel_sp = child->kernel_stack + PAGE_SIZE;
+    child->user_stack = 0;
+    child->user_sp = USER_SP_VA;
     
     child->pending_signals = 0;
     child->is_handling_signal = 0;
@@ -306,9 +312,6 @@ long fork_process(struct pt_regs *regs) {
     }
 
     asm volatile("sfence.vma zero, zero" ::: "memory");
-
-    child->user_stack = 0;
-    child->user_sp = USER_SP_VA;
     
     child->cpio_addr = parent->cpio_addr;
     child->code_size = parent->code_size;
@@ -388,6 +391,21 @@ void thread_handle_signals(struct pt_regs *regs) {
             // Mapping to 0x0000003000000000UL for Signal stack
             map_pages(curr->pgd, USER_SIG_STACK_VA, PAGE_SIZE, sig_stack_pa, PROT_USER_RWX);
             
+            int sig_vma_idx = -1;
+            for (int i = 0; i < MAX_VMAS; i++) {
+                if (!curr->vmas[i].used) {
+                    curr->vmas[i].vm_start = USER_SIG_STACK_VA;
+                    curr->vmas[i].vm_end   = USER_SIG_STACK_VA + PAGE_SIZE;
+                    curr->vmas[i].vm_prot  = PROT_READ | PROT_WRITE | PROT_EXEC; 
+                    curr->vmas[i].vm_flags = MAP_ANONYMOUS; 
+                    curr->vmas[i].used     = 1;
+                    sig_vma_idx = i;
+                    break;
+                }
+            }
+            if (sig_vma_idx == -1)
+                uart_puts("Warning: VMA is full, cannot record signal stack!\n");
+            
             unsigned long kernel_sp = curr->signal_stack + PAGE_SIZE; 
             unsigned long user_sp = USER_SIG_STACK_VA + PAGE_SIZE; 
             
@@ -443,6 +461,8 @@ void kill_zombies() {
                 free((void*)zombie->user_stack);
             if (zombie->signal_stack)
                 free((void*)zombie->signal_stack);
+            if (zombie->pgd)
+                free_page_tables(zombie->pgd);
             free(zombie);
         }
         else {

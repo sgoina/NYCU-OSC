@@ -90,7 +90,7 @@ void do_trap(struct pt_regs* regs) {
                                 memcpy(new_page, old_va, PAGE_SIZE);
                                 
                                 // Update PTE to be writable and point to the new frame
-                                unsigned long new_pa = (unsigned long)virt_to_phys(new_page);
+                                unsigned long new_pa = virt_to_phys((unsigned long)new_page);
                                 map_pages(curr->pgd, fault_page_va, PAGE_SIZE, new_pa, pte_prot);
                             }
                             // Only this process needs this page frame => update pte permission directly
@@ -131,11 +131,8 @@ void do_trap(struct pt_regs* regs) {
                                     pte_prot |= PTE_X;
                                 
                                 // Make a pte for the new-allocated frame
-                                unsigned long page_pa = (unsigned long)virt_to_phys(new_page);
+                                unsigned long page_pa = virt_to_phys((unsigned long)new_page);
                                 map_pages(curr->pgd, fault_page_va, PAGE_SIZE, page_pa, pte_prot);
-
-                                asm volatile("sfence.vma zero, zero" ::: "memory");
-                                handled = 1; 
                             }
                             else {
                                 uart_puts("[Translation] OOM!\n");
