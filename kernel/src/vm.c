@@ -68,7 +68,7 @@ void setup_vm()
                         uart_pte[k] = MAKE_PTE(uart_pa, PROT_DEVICE);
                     // Other pte entry sets to PROT_KERNEL
                     else 
-                        uart_pte[k] = MAKE_PTE(uart_pa, PROT_KERNEL);
+                        uart_pte[k] = MAKE_PTE(uart_pa, PROT_DEVICE);
                 }
             } 
             // If PMD entry is for PLIC
