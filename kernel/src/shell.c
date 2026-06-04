@@ -9,11 +9,18 @@
 #include "task.h"
 #include "thread.h"
 #include "vm.h"
+#include "vfs.h"
+#include "tmpfs.h"
 
 // Command length limit
 #define MAX_CMD_LEN 128
 
 extern unsigned long CPU_FREQ; // from timer.c
+
+#define MAX_FD 16
+struct file* fdt[MAX_FD] = {0};
+extern struct mount* rootfs; //vfs.h
+extern struct filesystem fs_list[]; //vfs.h
 
 void start_kernel_shell(){
     char buffer[MAX_CMD_LEN];
@@ -136,6 +143,133 @@ void start_kernel_shell(){
                 thread_create(foo);
             }
             //idle(); // Comment for shell can do after testing.
+        }
+        else if (strcmp(buffer, "file") == 0){
+            rootfs = allocate(sizeof(struct mount));
+            struct filesystem fs = {.name = "tmpfs", .setup_mount = tmpfs_setup_mount};
+            int id = register_filesystem(&fs);
+            fs_list[id].setup_mount(&fs_list[id], rootfs);
+            // Test 1: Normal
+            int fd = -1;
+            int length = 0;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/file.txt", O_CREAT, &fdt[i]) == 0){
+                    fd = i;
+                    break;
+                }
+            }
+            length = vfs_write(fdt[fd], "Operating Systems Capstone", 26);
+            if (fdt[fd]){
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+
+            char buf[64] = {0};
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/file.txt", 0, &fdt[i]) == 0){
+                    fd = i;
+                    break;
+                }
+            }
+            length = vfs_read(fdt[fd], buf, sizeof(buf) - 1);
+            if (fdt[fd]){
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+
+            uart_puts((strcmp(buf, "Operating Systems Capstone") == 0) ? "Test passed. Nice work!\n" : "Test failed. Keep trying!\n");
+            // Test 2: No O_CREAT
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/Fakefile.txt", 0, &fdt[i]) == 0){
+                    fd = i;
+                    break;
+                }
+            }
+            uart_puts((fd == -1) ? "Test passed. Nice work!\n" : "Test failed. Keep trying!\n");
+            // Test 3: Read/Write Over file size
+            fd = -1;
+            int write_len = 0;
+            int read_len = 0;
+            int total_written = 0;
+            int total_read = 0;
+
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/Hugefile.txt", O_CREAT, &fdt[i]) == 0) {
+                    fd = i;
+                    break;
+                }
+            }
+
+            if (fd != -1) {
+                char chunk_write[100];
+                for (int i = 0; i < 50; i++) {
+                    for(int j = 0; j < 100; j++) {
+                        chunk_write[j] = 'A' + ((i * 100 + j) % 26); 
+                    }
+                    
+                    int w = vfs_write(fdt[fd], chunk_write, 100);
+                    if (w > 0) {
+                        total_written += w;
+                    }
+                }
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/Hugefile.txt", 0, &fdt[i]) == 0) {
+                    fd = i;
+                    break;
+                }
+            }
+
+            int is_data_correct = 1;
+            if (fd != -1) {
+                char chunk_read[100];
+                for (int i = 0; i < 50; i++) {
+                    int r = vfs_read(fdt[fd], chunk_read, 100);
+                    if (r > 0) {
+                        for (int j = 0; j < r; j++) {
+                            if (chunk_read[j] != 'A' + ((total_read + j) % 26)) {
+                                is_data_correct = 0;
+                            }
+                        }
+                        total_read += r;
+                    } else {
+                        break; 
+                    }
+                }
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+
+            if (total_written == 4096 && total_read == 4096 && is_data_correct) {
+                uart_puts("Test passed. Nice work!\n");
+            } else {
+                uart_puts("Test failed. Keep trying!\n");
+            }
+            
+            // Test 4: Recreate same file
+            struct vnode* dir_node = NULL;
+            struct vnode* new_target = NULL;
+
+            if (vfs_lookup("/", &dir_node) == 0) {
+                if (dir_node != NULL && dir_node->v_ops != NULL) {
+                    int result = dir_node->v_ops->create(dir_node, &new_target, "file.txt");
+                    uart_puts((result == -1) ? "Test passed. Nice work!\n" : "Test failed. Keep trying!\n");
+                }
+                else {
+                    uart_puts("Error: dir_node or v_ops is NULL!\n");
+                }
+            }
+            else {
+                uart_puts("Error: vfs_lookup failed to find root directory!\n");
+            }
+
+            
+            free(rootfs);
         }
         // unknown command (except type nothing)
         else if (idx != 0){

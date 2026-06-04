@@ -92,3 +92,20 @@ int strncmp(const char *s1, const char *s2, int n) {
     // not match
     return (*(unsigned char *)s1 - *(unsigned char *)s2);
 }
+
+char *strncpy(char *dest, const char *src, unsigned int n) {
+    char *d = dest;
+    while (n > 0 && *src != '\0') {
+        *d = *src;
+        d++;
+        src++;
+        n--;
+    }
+    while (n > 0) {
+        *d = '\0';
+        d++;
+        n--;
+    }
+    
+    return dest;
+}

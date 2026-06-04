@@ -1,3 +1,6 @@
+#ifndef DEFINT_H
+#define DEFINT_H
+
 typedef unsigned char      uint8_t;
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
@@ -22,3 +25,5 @@ static inline uint64_t bswap64(uint64_t x) {
             ((x & 0x00FF000000000000ULL) >> 40) |
             ((x & 0xFF00000000000000ULL) >> 56));
 }
+
+#endif // DEFINT_H
