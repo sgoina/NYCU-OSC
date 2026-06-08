@@ -5,27 +5,15 @@
 #include "uart.h"
 #include "mem_alloc.h"
 
-#define TMPFS_MAX_FILE_NAME 15
-#define TMPFS_MAX_DIR_ENTRY 16
-#define TMPFS_MAX_FILE_SIZE 4096
-
-enum fsnode_type { FS_DIR, FS_FILE };
-
-struct tmpfs_vnode {
-    enum fsnode_type type;
-    char name[TMPFS_MAX_FILE_NAME];
-    struct vnode* entry[TMPFS_MAX_DIR_ENTRY];
-    char* data;
-    size_t size;
-};
-
 struct file_operations tmpfs_file_ops = {.open = tmpfs_open,
                                          .close = tmpfs_close,
                                          .read = tmpfs_read,
                                          .write = tmpfs_write};
 
 struct vnode_operations tmpfs_vnode_ops = {.lookup = tmpfs_lookup,
-                                           .create = tmpfs_create};
+                                           .create = tmpfs_create,
+                                           .mkdir = tmpfs_mkdir,
+                                           .checkType = tmpfs_is_dir_type};
 
 struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
     // TODO: Implement this function
@@ -183,5 +171,48 @@ int tmpfs_create(struct vnode* dir_node,
     // 將新建的 vnode 透過 target 回傳給 caller
     *target = new_vnode;
     
+    return 0;
+}
+
+int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* component_name) {
+    // 1. 檢查是否已經有同名檔案或目錄存在
+    struct vnode* check_node;
+    if (tmpfs_lookup(dir_node, &check_node, component_name) == 0) {
+        return -1; // 名稱已被佔用
+    }
+
+    struct tmpfs_vnode* dir_internal = (struct tmpfs_vnode*)dir_node->internal;
+    
+    // 2. 尋找父目錄 entry 中第一個空的位置
+    int free_idx = -1;
+    for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
+        if (dir_internal->entry[i] == NULL) {
+            free_idx = i;
+            break;
+        }
+    }
+    
+    if (free_idx == -1) return -1; // 目錄滿了
+
+    // 3. 建立一個新的「目錄」節點 (FS_DIR)
+    struct vnode* new_vnode = tmpfs_create_vnode(FS_DIR);
+    struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
+    
+    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
+    // 如果你有實作確保字串結尾的習慣，可以在這裡強制加上 '\0'
+    
+    dir_internal->entry[free_idx] = new_vnode;
+    
+    if (target != NULL) {
+        *target = new_vnode;
+    }
+    
+    return 0;
+}
+
+int tmpfs_is_dir_type(struct vnode* target){
+    struct tmpfs_vnode* internal = (struct tmpfs_vnode*)target->internal;
+    if (internal->type != FS_DIR)
+        return -1;
     return 0;
 }

@@ -267,6 +267,114 @@ void start_kernel_shell(){
             else {
                 uart_puts("Error: vfs_lookup failed to find root directory!\n");
             }
+            // ==========================================
+            // Test 5: Multi-level VFS 綜合測試
+            // ==========================================
+            fd = -1;
+            char buf2[64] = {0};
+
+            // 1. 建立兩層目錄 /home 以及 /home/user
+            int res1 = vfs_mkdir("/home");
+            int res2 = vfs_mkdir("/home/user");
+            uart_puts((res1 == 0 && res2 == 0) ? "Test 5.1 passed (mkdir)\n" : "Test 5.1 failed\n");
+
+            // 2. 嘗試建立已經存在的目錄 (應該要失敗回傳 -1)
+            int res3 = vfs_mkdir("/home/user");
+            uart_puts((res3 == -1) ? "Test 5.2 passed (mkdir exist protection)\n" : "Test 5.2 failed\n");
+
+            // 3. 在深層目錄建立檔案 /home/user/secret.txt
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/home/user/secret.txt", O_CREAT, &fdt[i]) == 0){
+                    fd = i;
+                    break;
+                }
+            }
+            uart_puts((fd != -1) ? "Test 5.3 passed (open in deep dir)\n" : "Test 5.3 failed\n");
+
+            // 4. 寫入資料並關閉
+            if (fd != -1) {
+                vfs_write(fdt[fd], "Hidden Treasure", 15);
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+
+            // 5. 重新開啟深層檔案並讀取，驗證路徑解析 (vfs_lookup) 是否正常穿越目錄
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/home/user/secret.txt", 0, &fdt[i]) == 0){
+                    fd = i;
+                    break;
+                }
+            }
+            if (fd != -1) {
+                vfs_read(fdt[fd], buf2, 15);
+                vfs_close(fdt[fd]);
+                fdt[fd] = 0;
+            }
+            uart_puts((strcmp(buf2, "Hidden Treasure") == 0) ? "Test 5.4 passed (read from deep dir)\n" : "Test 5.4 failed\n");
+            
+            // ==========================================
+            // Test 6: File System Mounting Test
+            // ==========================================
+            fd = -1;
+
+            // 1. 建立掛載點
+            vfs_mkdir("/mnt");
+
+            // 2. 掛載一個全新的 tmpfs 到 /mnt
+            int mount_res = vfs_mount("/mnt", "tmpfs");
+            uart_puts((mount_res == 0) ? "Test 6.1 passed (mount success)\n" : "Test 6.1 failed\n");
+
+            // 3. 在原本的根目錄建立 a.txt
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/a.txt", O_CREAT, &fdt[i]) == 0){
+                    fd = i; break;
+                }
+            }
+            vfs_write(fdt[fd], "Root FS", 7);
+            vfs_close(fdt[fd]);
+            fdt[fd] = 0;
+
+            // 4. 在掛載點 /mnt 建立同名的 a.txt
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/mnt/a.txt", O_CREAT, &fdt[i]) == 0){
+                    fd = i; break;
+                }
+            }
+            vfs_write(fdt[fd], "Mounted FS", 10);
+            vfs_close(fdt[fd]);
+            fdt[fd] = 0;
+
+            // 5. 驗證兩者沒有互相覆蓋 (隔離成功)
+            char buf_root[32] = {0};
+            char buf_mnt[32] = {0};
+
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/a.txt", 0, &fdt[i]) == 0){
+                    fd = i; break;
+                }
+            }
+            vfs_read(fdt[fd], buf_root, 7);
+            vfs_close(fdt[fd]);
+            fdt[fd] = 0;
+
+            fd = -1;
+            for (int i = 0; i < MAX_FD; i++) {
+                if (fdt[i] == 0 && vfs_open("/mnt/a.txt", 0, &fdt[i]) == 0){
+                    fd = i; break;
+                }
+            }
+            vfs_read(fdt[fd], buf_mnt, 10);
+            vfs_close(fdt[fd]);
+            fdt[fd] = 0;
+
+            if (strcmp(buf_root, "Root FS") == 0 && strcmp(buf_mnt, "Mounted FS") == 0) {
+                uart_puts("Test 6.2 passed (Filesystems are isolated!)\n");
+            } else {
+                uart_puts("Test 6.2 failed\n");
+            }
 
             
             free(rootfs);
