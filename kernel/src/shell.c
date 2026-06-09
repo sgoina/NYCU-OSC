@@ -2,7 +2,7 @@
 #include "sbi.h"
 #include "uart.h"
 #include "string.h"
-#include "ramfs.h"
+#include "cpio.h"
 #include "mem_alloc.h"
 #include "defint.h"
 #include "timer.h"
@@ -19,8 +19,6 @@ extern unsigned long CPU_FREQ; // from timer.c
 
 #define MAX_FD 16
 struct file* fdt[MAX_FD] = {0};
-
-
 
 void start_kernel_shell(){
     char buffer[MAX_CMD_LEN];

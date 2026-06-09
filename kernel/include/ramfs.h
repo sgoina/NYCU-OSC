@@ -1,26 +1,28 @@
-struct cpio_t {
-    char magic[6];
-    char ino[8];
-    char mode[8];
-    char uid[8];
-    char gid[8];
-    char nlink[8];
-    char mtime[8];
-    char filesize[8];
-    char devmajor[8];
-    char devminor[8];
-    char rdevmajor[8];
-    char rdevminor[8];
-    char namesize[8];
-    char check[8];
+#ifndef RAMFS_H
+#define RAMFS_H
+
+#include "vfs.h"
+
+#define RAMFS_MAX_FILE_NAME 15
+#define RAMFS_MAX_DIR_ENTRY 16
+#define RAMFS_MAX_FILE_SIZE 4096
+
+struct ramfs_vnode {
+    enum fsnode_type type;
+    char name[RAMFS_MAX_FILE_NAME];
+    struct vnode* entry[RAMFS_MAX_DIR_ENTRY];
+    char* data;
+    size_t size;
 };
 
-int initrd_addr(unsigned long dtb_ptr);
+int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt);
+int ramfs_open(struct vnode* file_node, struct file** target);
+int ramfs_close(struct file* file);
+int ramfs_read(struct file* file, void* buf, size_t len);
+int ramfs_write(struct file* file, const void* buf, size_t len);
+int ramfs_lookup(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int ramfs_create(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int ramfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int ramfs_is_dir_type(struct vnode* target);
 
-void ls_filenames();
-
-void cat_file_content(const char* filename);
-
-int exec(const char *filename);
-
-void* find_program(const char *filename, unsigned int *filesize_out);
+#endif // RAMFS_H

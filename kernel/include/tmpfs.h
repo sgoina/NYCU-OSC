@@ -7,8 +7,6 @@
 #define TMPFS_MAX_DIR_ENTRY 16
 #define TMPFS_MAX_FILE_SIZE 4096
 
-enum fsnode_type { FS_DIR, FS_FILE };
-
 struct tmpfs_vnode {
     enum fsnode_type type;
     char name[TMPFS_MAX_FILE_NAME];

@@ -3,7 +3,7 @@
 #include "trap.h"
 #include "thread.h"
 #include "timer.h"
-#include "ramfs.h"
+#include "cpio.h"
 #include "uart.h"
 #include "utils.h"
 #include "video.h"
@@ -406,7 +406,6 @@ long sys_chdir(const char *path) {
     
     // 檢查目標 vnode 是不是真的是一個目錄
     // 假設你的 vnode 或 internal 有存放 type (如 FS_DIR)
-    struct tmpfs_vnode* internal = target_dir->internal;
     if (target_dir->v_ops->checkType(target_dir) != 0)
         return -1; 
     

@@ -4,6 +4,8 @@
 
 #define O_CREAT 00000100
 
+enum fsnode_type { FS_DIR, FS_FILE };
+
 struct vnode {
     struct mount* mount;
     struct vnode_operations* v_ops;
