@@ -15,7 +15,6 @@ extern struct task_struct* run_queue; // thread.c
 extern unsigned int CPU_FREQ; // timer.c
 extern unsigned long pgd[]; // vm.c
 
-
 // 0: getpid
 long sys_getpid() {
     return get_current()->pid;
@@ -292,6 +291,130 @@ void* sys_mmap(void *addr, unsigned long length, int prot, int flags) {
     return (void*)target_addr; // return virtual address of the begin of this region
 }
 
+// 14: open
+long sys_open(const char *pathname, int flags) {
+    if (pathname == NULL) return -1;
+    
+    struct task_struct *curr = get_current();
+    
+    // 尋找 FDT 空位
+    int fd = -1;
+    for (int i = 0; i < MAX_FS; i++) {
+        if (curr->fdt[i] == NULL) {
+            fd = i;
+            break;
+        }
+    }
+    
+    if (fd == -1) {
+        return -1; // FDT 滿了 (Too many open files)
+    }
+    
+    struct file *target_file = NULL;
+    // 注意：在完整 Multitask 中，vfs_open 需要知道當前行程的 pwd 和 root
+    // 我們假設你稍後會修改 vfs_open 或 vfs_lookup 來支援 pwd
+    int ret = vfs_open(pathname, flags, &target_file);
+    
+    if (ret != 0 || target_file == NULL) {
+        return -1; // 開啟失敗
+    }
+    
+    // 將 file 指標存入 FDT，並設定參考計數
+    curr->fdt[fd] = target_file;
+    
+    return fd;
+}
+
+// 15: close
+long sys_close(int fd) {
+    struct task_struct *curr = get_current();
+    
+    // 檢查 fd 是否合法
+    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+        return -1; // Bad file descriptor
+    }
+    
+    struct file *file_to_close = curr->fdt[fd];
+    curr->fdt[fd] = NULL; // 先把 FDT 欄位清空，避免 Race Condition
+    
+    // 呼叫底層 vfs_close (需處理 f_count)
+    return vfs_close(file_to_close);
+}
+
+// 16: read
+long sys_read(int fd, void *buf, unsigned long count) {
+    if (buf == NULL) return -1;
+    struct task_struct *curr = get_current();
+    
+    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+        return -1; // Bad file descriptor
+    }
+    
+    // 透過 fd 取得 file struct，並呼叫 vfs_read
+    return vfs_read(curr->fdt[fd], buf, count);
+}
+
+// 17: write
+long sys_write(int fd, const void *buf, unsigned long count) {
+    if (buf == NULL) return -1;
+    struct task_struct *curr = get_current();
+    
+    // 你可能會有標準輸出的特例處理
+    // 例如：如果作業要求 stdout (fd=1) 直接印到 UART
+    /*
+    if (fd == 1 || fd == 2) {
+        return sys_uart_write((const char*)buf, count);
+    }
+    */
+    // (如果作業後面有規定 stdin/stdout 要掛在 /dev/uart 上，那上面這段特例就不用寫，
+    // 會交給 vfs_write 裡面底層的 /dev/uart write 處理)
+
+    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+        return -1; 
+    }
+    
+    return vfs_write(curr->fdt[fd], buf, count);
+}
+
+// 18: mkdir
+long sys_mkdir(const char *pathname, unsigned int mode) {
+    if (pathname == NULL) return -1;
+    
+    // 作業說明表示可以忽略 mode 參數
+    // vfs_mkdir 需要能解析相對路徑 (基於 curr->pwd)
+    return vfs_mkdir(pathname);
+}
+
+// 19: mount
+long sys_mount(const char *src, const char *target, const char *filesystem, unsigned long flags, const void *data) {
+    if (target == NULL || filesystem == NULL) return -1;
+    
+    // 忽略 src, flags, data，直接呼叫 vfs_mount
+    return vfs_mount(target, filesystem);
+}
+
+// 20: chdir
+long sys_chdir(const char *path) {
+    if (path == NULL) return -1;
+    struct task_struct *curr = get_current();
+    
+    struct vnode *target_dir;
+    // vfs_lookup 會根據路徑找到對應的 vnode
+    if (vfs_lookup(path, &target_dir) != 0) {
+        return -1; // 找不到該目錄
+    }
+    
+    // 檢查目標 vnode 是不是真的是一個目錄
+    // 假設你的 vnode 或 internal 有存放 type (如 FS_DIR)
+    struct tmpfs_vnode* internal = target_dir->internal;
+    if (target_dir->v_ops->checkType(target_dir) != 0)
+        return -1; 
+    
+    // 更新當前行程的工作目錄
+    curr->pwd = target_dir;
+    return 0;
+}
+
 void syscall_handler(struct pt_regs *regs) {
     // a7 stores system call number
     unsigned long syscall_num = regs->a7;
@@ -360,9 +483,45 @@ void syscall_handler(struct pt_regs *regs) {
             // a0 = pid, a1 = signum
             ret = (void*)(long)sys_kill((int)regs->a0, (int)regs->a1); 
             break;
+            
         case 13: // mmap
             // a0 = addr, a1 = length, a2 = prot, a3 = flags
             ret = (void*)sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
+            break;
+            
+        case 14: // open
+            // a0 = pathname, a1 = flags
+            ret = (void*)(long)sys_open((const char*)regs->a0, (int)regs->a1);
+            break;
+
+        case 15: // close
+            // a0 = fd
+            ret = (void*)(long)sys_close((int)regs->a0);
+            break;
+
+        case 16: // read
+            // a0 = fd, a1 = buf, a2 = count
+            ret = (void*)(long)sys_read((int)regs->a0, (void*)regs->a1, (unsigned long)regs->a2);
+            break;
+
+        case 17: // write
+            // a0 = fd, a1 = buf, a2 = count
+            ret = (void*)(long)sys_write((int)regs->a0, (const void*)regs->a1, (unsigned long)regs->a2);
+            break;
+
+        case 18: // mkdir
+            // a0 = pathname, a1 = mode
+            ret = (void*)(long)sys_mkdir((const char*)regs->a0, (unsigned int)regs->a1);
+            break;
+
+        case 19: // mount
+            // a0 = src, a1 = target, a2 = filesystem, a3 = flags, a4 = data
+            ret = (void*)(long)sys_mount((const char*)regs->a0, (const char*)regs->a1, (const char*)regs->a2, (unsigned long)regs->a3, (const void*)regs->a4);
+            break;
+
+        case 20: // chdir
+            // a0 = path
+            ret = (void*)(long)sys_chdir((const char*)regs->a0);
             break;
             
         default:

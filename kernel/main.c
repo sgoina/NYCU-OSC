@@ -8,6 +8,7 @@
 #include "thread.h"
 #include "plic.h"
 #include "vm.h"
+#include "vfs.h"
 
 extern char _start[]; // from start.S
 extern char _end[];   // from start.S
@@ -42,6 +43,7 @@ void start_main(unsigned long hartid, unsigned long dtb_ptr) {
     else
         uart_puts("Can't initialize file system!\n");
     init_mem(dtb_ptr);
+    init_vfs();
     
     // Set Thread Pointer
     asm volatile("move tp, %0" : : "r"(thread_create(idle)));

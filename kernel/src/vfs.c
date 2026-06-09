@@ -4,13 +4,20 @@
 #include "utils.h"
 #include "mem_alloc.h"
 #include "uart.h"
+#include "thread.h"
 
 #define MAX_FS   16
-#define MAX_FD   16
 #define PATH_MAX 255
 
 struct mount* rootfs;
 struct filesystem fs_list[MAX_FS];
+
+void init_vfs(){
+    rootfs = allocate(sizeof(struct mount));
+    struct filesystem fs = {.name = "tmpfs", .setup_mount = tmpfs_setup_mount};
+    int id = register_filesystem(&fs);
+    fs_list[id].setup_mount(&fs_list[id], rootfs);
+}
 
 int register_filesystem(struct filesystem* fs) {
     for (int i = 0; i < MAX_FS; i++) {
@@ -57,6 +64,7 @@ int vfs_open(const char* pathname, int flags, struct file** target) {
     }
     (*target) = allocate(sizeof(struct file));
     (*target)->flags = flags;
+    (*target)->f_count = 1;
     vnode->f_ops->open(vnode, target);
     return 0;
 }
@@ -66,7 +74,10 @@ int vfs_close(struct file* file) {
         uart_puts("The file is NULL!\n");
         return -1;
     }
-    return file->f_ops->close(file);
+    file->f_count--;
+    if (file->f_count != 0)
+        return 0;
+    return file->f_ops->close(file); // 只有當最後一個行程關閉它時，才真正 free 掉
 }
 
 int vfs_read(struct file* file, void* buf, size_t len) {
@@ -168,6 +179,9 @@ int vfs_mount(const char* target, const char* filesystem) {
         free(mnt);
         return -1;
     }
+    
+    // 掛載完成後，將新檔案系統 root 的 parent 指向掛載點的 parent
+    mnt->root->parent = target_node->parent;
 
     // 5. 【最關鍵的一步】建立橋樑
     // 將原來目標目錄的 mount 指標，指向我們新建立的 mount 結構
@@ -177,35 +191,64 @@ int vfs_mount(const char* target, const char* filesystem) {
 }
 
 int vfs_lookup(const char* pathname, struct vnode** target) {
-    if (strlen(pathname) == 0 || strcmp(pathname, "/") == 0) {
-        *target = rootfs->root;
+    if (pathname == NULL) return -1;
+
+    struct task_struct* curr = get_current();
+    struct vnode* node;
+    int i = 0;
+
+    // 1. 判斷絕對路徑 vs 相對路徑
+    if (pathname[0] == '/') {
+        node = curr->root; // 絕對路徑：從 root 開始
+        // 略過開頭所有的連續斜線 (正規化)
+        while (pathname[i] == '/') i++;
+    } else {
+        node = curr->pwd;  // 相對路徑：從當前工作目錄開始
+    }
+
+    // 若路徑只有 "/"
+    if (pathname[i] == '\0') {
+        *target = node;
         return 0;
     }
 
-    struct vnode* node = rootfs->root;
-    char component[PATH_MAX] = {0};
-    int idx = 0;
+    char component[PATH_MAX];
 
-    for (int i = 1; i < strlen(pathname); i++) {
-        if (pathname[i] == '/') {
-            component[idx] = '\0';
-            if (node->v_ops->lookup(node, &node, component) != 0)
-                return -1;
-            while (node->mount) // If node is mount point, go to the mounted file system’s root vnode
-                node = node->mount->root;
-            idx = 0;
+    // 2. 逐一解析路徑節點
+    while (pathname[i] != '\0') {
+        int idx = 0;
+
+        // 切割出下一個 component，直到遇到 '/' 或字串結束
+        while (pathname[i] != '/' && pathname[i] != '\0') {
+            component[idx++] = pathname[i++];
         }
-        else {
-            component[idx++] = pathname[i];
+        component[idx] = '\0';
+
+        // 略過連續的斜線 (處理 "dir1///dir2" 的情況)
+        while (pathname[i] == '/') i++;
+
+        if (idx == 0) continue; // 防禦性略過空字串
+
+        // 3. 處理 "." 與 ".."
+        if (strcmp(component, ".") == 0) {
+            continue; // 留在此層目錄，不做事
+        } else if (strcmp(component, "..") == 0) {
+            // 回到上一層目錄
+            if (node->parent != NULL) {
+                node = node->parent;
+            }
+        } else {
+            // 一般檔案或目錄的 lookup
+            if (node->v_ops->lookup(node, &node, component) != 0) {
+                return -1; // 找不到該節點
+            }
+
+            // 若該節點是個掛載點，自動跳轉到掛載的檔案系統 root
+            while (node->mount) {
+                node = node->mount->root;
+            }
         }
     }
-    component[idx] = '\0';
-
-    if (node->v_ops->lookup(node, &node, component) != 0)
-        return -1;
-
-    while (node->mount)
-        node = node->mount->root;
 
     *target = node;
     return 0;

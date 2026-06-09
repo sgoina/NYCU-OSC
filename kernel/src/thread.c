@@ -15,6 +15,7 @@ extern void switch_to(struct task_struct* prev, struct task_struct* next); // st
 extern char sigreturn_trampoline_start[]; // start.S
 extern char sigreturn_trampoline_end[]; // start.S
 extern unsigned long pgd[]; // vm.c
+extern struct mount* rootfs; // vfs.c
 
 struct task_struct* run_queue = 0;
 int nr_threads = 0; // new pid number
@@ -142,9 +143,24 @@ struct task_struct* thread_create(void (*threadfn)()) {
     task->pgd = pgd; // satp in kernel thread is same
     task->cpio_addr = 0; // Kenerl image program isn't in CPIO
     task->code_size = 0;
-    
+    // initialize vmas
     for (int i = 0; i < MAX_VMAS; i++) {
         task->vmas[i].used = 0;
+    }
+    // initialize VFS state
+    for (int i = 0; i < MAX_FS; i++) {
+        task->fdt[i] = NULL; // 清空所有 file descriptor
+    }
+    
+    // 如果全域的 rootfs 已經準備好，就預設指向根目錄；否則先設為 NULL
+    extern struct mount* rootfs; // 確保編譯器認得全域變數 rootfs
+    if (rootfs != NULL) {
+        task->pwd = rootfs->root;
+        task->root = rootfs->root;
+    }
+    else {
+        task->pwd = NULL;
+        task->root = NULL;
     }
     
     enqueue(&run_queue, task);
@@ -204,7 +220,12 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     for (int i = 2; i < MAX_VMAS; i++) {
         task->vmas[i].used = 0;
     }
-    
+    // initialize VFS state
+    for (int i = 0; i < MAX_FS; i++) {
+        task->fdt[i] = NULL; // 確保沒有繼承到垃圾指標
+    }
+    task->pwd = rootfs->root;  // User process 的預設起點是 "/"
+    task->root = rootfs->root; 
     
     // Simulate back from "sret" condition
     struct pt_regs* regs = (struct pt_regs*)(task->kernel_sp - sizeof(struct pt_regs));
@@ -256,6 +277,23 @@ long fork_process(struct pt_regs *regs) {
     for (int i = 0; i < MAX_SIGNALS; i++) {
         child->signal_handlers[i] = parent->signal_handlers[i];
     }
+    
+    // ==========================================
+    // 【新增】VFS 狀態與檔案描述符表 (FDT) 繼承
+    // ==========================================
+    child->pwd = parent->pwd;   // 繼承當前工作目錄
+    child->root = parent->root; // 繼承根目錄
+
+    for (int i = 0; i < MAX_FS; i++) {
+        child->fdt[i] = parent->fdt[i]; // 複製打開的檔案指標
+        
+        // 【重要】如果你有實作 file reference count (檔案參照計數)
+        // 這裡必須將 f_count 加 1，因為現在多了一個行程在使用這個檔案！
+        if (child->fdt[i] != NULL) {
+            child->fdt[i]->f_count++; 
+        }
+    }
+    // ==========================================
 
     // Simulate back from "sret" condition
     unsigned long regs_offset = parent->kernel_sp - (unsigned long)regs; // avoid there is something in parent->kernel stack, so need to calculate offset

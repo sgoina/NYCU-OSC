@@ -39,6 +39,7 @@ struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
 
 int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
     mnt->root = tmpfs_create_vnode(FS_DIR);
+    mnt->root->parent = mnt->root; // 根目錄的 parent 指向自己
     mnt->fs = fs;
     return 0;
 }
@@ -160,6 +161,7 @@ int tmpfs_create(struct vnode* dir_node,
 
     // 建立一個新的檔案節點 (FS_FILE)
     struct vnode* new_vnode = tmpfs_create_vnode(FS_FILE);
+    new_vnode->parent = dir_node;
     struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
     
     // 複製檔名
@@ -196,6 +198,7 @@ int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* compo
 
     // 3. 建立一個新的「目錄」節點 (FS_DIR)
     struct vnode* new_vnode = tmpfs_create_vnode(FS_DIR);
+    new_vnode->parent = dir_node;
     struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
     
     strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);

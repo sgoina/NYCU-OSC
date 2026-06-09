@@ -9,6 +9,7 @@ struct vnode {
     struct vnode_operations* v_ops;
     struct file_operations* f_ops;
     void* internal;
+    struct vnode* parent;
 };
 
 // file handle
@@ -17,6 +18,7 @@ struct file {
     size_t f_pos;  // RW position of this file handle
     struct file_operations* f_ops;
     int flags;
+    int f_count; // 【新增】有多少個行程正在使用這個 file
 };
 
 struct mount {
@@ -43,6 +45,7 @@ struct vnode_operations {
     int (*checkType)(struct vnode* target);
 };
 
+void init_vfs();
 int register_filesystem(struct filesystem* fs);
 int vfs_open(const char* pathname, int flags, struct file** target);
 int vfs_close(struct file* file);

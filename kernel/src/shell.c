@@ -19,8 +19,8 @@ extern unsigned long CPU_FREQ; // from timer.c
 
 #define MAX_FD 16
 struct file* fdt[MAX_FD] = {0};
-extern struct mount* rootfs; //vfs.h
-extern struct filesystem fs_list[]; //vfs.h
+
+
 
 void start_kernel_shell(){
     char buffer[MAX_CMD_LEN];
@@ -145,10 +145,6 @@ void start_kernel_shell(){
             //idle(); // Comment for shell can do after testing.
         }
         else if (strcmp(buffer, "file") == 0){
-            rootfs = allocate(sizeof(struct mount));
-            struct filesystem fs = {.name = "tmpfs", .setup_mount = tmpfs_setup_mount};
-            int id = register_filesystem(&fs);
-            fs_list[id].setup_mount(&fs_list[id], rootfs);
             // Test 1: Normal
             int fd = -1;
             int length = 0;
@@ -375,9 +371,6 @@ void start_kernel_shell(){
             } else {
                 uart_puts("Test 6.2 failed\n");
             }
-
-            
-            free(rootfs);
         }
         // unknown command (except type nothing)
         else if (idx != 0){

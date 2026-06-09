@@ -2,6 +2,7 @@
 #define THREAD_H
 
 #include "trap.h"
+#include "vfs.h"
 
 #define TASK_RUNNING 0
 #define TASK_ZOMBIE  1
@@ -10,6 +11,8 @@
 #define MAX_SIGNALS 64
 // Maximum number of memory regions
 #define MAX_VMAS 256
+// Maximum number of open files
+#define MAX_FS   16
 
 struct vm_area_struct {
     unsigned long vm_start; 
@@ -42,6 +45,9 @@ struct task_struct {
     unsigned int code_size; 
     unsigned long cpio_addr; // the address of the program code in CPIO
     struct vm_area_struct vmas[MAX_VMAS]; // memory regions
+    struct file* fdt[MAX_FS]; // file descriptor table
+    struct vnode* pwd;        // 當前工作目錄 (Present Working Directory)
+    struct vnode* root;       // 該行程的根目錄 (通常是 rootfs->root)
 };
 
 struct task_struct* get_current();
