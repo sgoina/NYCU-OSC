@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "tmpfs.h"
 #include "ramfs.h"
+#include "devfs.h"
 #include "string.h"
 #include "utils.h"
 #include "mem_alloc.h"
@@ -18,13 +19,22 @@ void init_vfs(){
     struct filesystem tmp_fs = {.name = "tmpfs", .setup_mount = tmpfs_setup_mount};
     int id = register_filesystem(&tmp_fs);
     fs_list[id].setup_mount(&fs_list[id], rootfs);
-    // 註冊 ramfs
+    
+    // 2. 註冊 ramfs
     struct filesystem ramfs_fs = {.name = "ramfs", .setup_mount = ramfs_setup_mount};
     register_filesystem(&ramfs_fs);
     // 在 rootfs (通常是 tmpfs) 建立 /ramfs 資料夾
     vfs_mkdir("/ramfs");
     // 掛載 ramfs 到 /ramfs
     vfs_mount("/ramfs", "ramfs");
+    
+    // 3. 註冊 devfs
+    struct filesystem devfs_fs = {.name = "devfs", .setup_mount = devfs_setup_mount};
+    register_filesystem(&devfs_fs);
+    // 在 rootfs 建立 /dev 目錄
+    vfs_mkdir("/dev"); 
+    // 掛載 devfs 到 /dev
+    vfs_mount("/dev", "devfs");
 }
 
 int register_filesystem(struct filesystem* fs) {

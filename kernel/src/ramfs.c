@@ -55,6 +55,7 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
     mnt->fs = fs;
 
     struct ramfs_vnode* root_internal = (struct ramfs_vnode*)root_node->internal;
+    strcpy(root_internal->name, "ramfs");
     int entry_idx = 0;
 
     // 2. 遍歷 CPIO 並建立 VFS 樹狀結構

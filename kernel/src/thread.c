@@ -227,6 +227,25 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     task->pwd = rootfs->root;  // User process 的預設起點是 "/"
     task->root = rootfs->root; 
     
+    // ==========================================
+    // 【Advanced 1】預先為 User Space 開啟標準輸出入
+    // ==========================================
+    struct file* uart_file = NULL;
+    
+    // 因為是在 Kernel 模式下準備 task，我們可以直接呼叫 vfs_open 開啟裝置檔案
+    int ret = vfs_open("/dev/uart", 0, &uart_file);
+    if (ret == 0 && uart_file != NULL) {
+        // 設定 f_count 為 3，避免 user 呼叫一次 close(0) 就把整個 uart_file 釋放掉
+        uart_file->f_count = 3; 
+        
+        task->fdt[0] = uart_file; // stdin
+        task->fdt[1] = uart_file; // stdout
+        task->fdt[2] = uart_file; // stderr
+    }
+    else
+        uart_puts("Warning: Failed to map standard I/O to /dev/uart.\n");
+    // ==========================================
+    
     // Simulate back from "sret" condition
     struct pt_regs* regs = (struct pt_regs*)(task->kernel_sp - sizeof(struct pt_regs));
     for (int i = 0; i < sizeof(struct pt_regs) / 8; i++){
