@@ -20,7 +20,7 @@ struct file {
     size_t f_pos;  // RW position of this file handle
     struct file_operations* f_ops;
     int flags;
-    int f_count; // 【新增】有多少個行程正在使用這個 file
+    int f_count; // How many threads are using this file
 };
 
 struct mount {

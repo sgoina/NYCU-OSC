@@ -148,12 +148,10 @@ struct task_struct* thread_create(void (*threadfn)()) {
         task->vmas[i].used = 0;
     }
     // initialize VFS state
-    for (int i = 0; i < MAX_FS; i++) {
-        task->fdt[i] = NULL; // 清空所有 file descriptor
+    for (int i = 0; i < MAX_FD; i++) {
+        task->fdt[i] = NULL;
     }
-    
-    // 如果全域的 rootfs 已經準備好，就預設指向根目錄；否則先設為 NULL
-    extern struct mount* rootfs; // 確保編譯器認得全域變數 rootfs
+    // Set pwd and root
     if (rootfs != NULL) {
         task->pwd = rootfs->root;
         task->root = rootfs->root;
@@ -221,21 +219,17 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
         task->vmas[i].used = 0;
     }
     // initialize VFS state
-    for (int i = 0; i < MAX_FS; i++) {
-        task->fdt[i] = NULL; // 確保沒有繼承到垃圾指標
+    for (int i = 0; i < MAX_FD; i++) {
+        task->fdt[i] = NULL;
     }
-    task->pwd = rootfs->root;  // User process 的預設起點是 "/"
+    // Set pwd and root, default is "/"
+    task->pwd = rootfs->root;
     task->root = rootfs->root; 
     
-    // ==========================================
-    // 【Advanced 1】預先為 User Space 開啟標準輸出入
-    // ==========================================
+    // set uart file to file descriptor table
     struct file* uart_file = NULL;
-    
-    // 因為是在 Kernel 模式下準備 task，我們可以直接呼叫 vfs_open 開啟裝置檔案
     int ret = vfs_open("/dev/uart", 0, &uart_file);
     if (ret == 0 && uart_file != NULL) {
-        // 設定 f_count 為 3，避免 user 呼叫一次 close(0) 就把整個 uart_file 釋放掉
         uart_file->f_count = 3; 
         
         task->fdt[0] = uart_file; // stdin
@@ -244,7 +238,6 @@ struct task_struct* user_process_create(unsigned long filesize, void* program_va
     }
     else
         uart_puts("Warning: Failed to map standard I/O to /dev/uart.\n");
-    // ==========================================
     
     // Simulate back from "sret" condition
     struct pt_regs* regs = (struct pt_regs*)(task->kernel_sp - sizeof(struct pt_regs));
@@ -297,22 +290,15 @@ long fork_process(struct pt_regs *regs) {
         child->signal_handlers[i] = parent->signal_handlers[i];
     }
     
-    // ==========================================
-    // 【新增】VFS 狀態與檔案描述符表 (FDT) 繼承
-    // ==========================================
-    child->pwd = parent->pwd;   // 繼承當前工作目錄
-    child->root = parent->root; // 繼承根目錄
+    // Inherit pwd, root and fdt
+    child->pwd = parent->pwd;
+    child->root = parent->root;
 
-    for (int i = 0; i < MAX_FS; i++) {
-        child->fdt[i] = parent->fdt[i]; // 複製打開的檔案指標
-        
-        // 【重要】如果你有實作 file reference count (檔案參照計數)
-        // 這裡必須將 f_count 加 1，因為現在多了一個行程在使用這個檔案！
-        if (child->fdt[i] != NULL) {
+    for (int i = 0; i < MAX_FD; i++) {
+        child->fdt[i] = parent->fdt[i];
+        if (child->fdt[i] != NULL)
             child->fdt[i]->f_count++; 
-        }
     }
-    // ==========================================
 
     // Simulate back from "sret" condition
     unsigned long regs_offset = parent->kernel_sp - (unsigned long)regs; // avoid there is something in parent->kernel stack, so need to calculate offset

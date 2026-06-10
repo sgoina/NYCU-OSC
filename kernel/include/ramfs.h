@@ -3,9 +3,8 @@
 
 #include "vfs.h"
 
-#define RAMFS_MAX_FILE_NAME 15
-#define RAMFS_MAX_DIR_ENTRY 16
-#define RAMFS_MAX_FILE_SIZE 4096
+#define RAMFS_MAX_FILE_NAME 32
+#define RAMFS_MAX_DIR_ENTRY 32
 
 struct ramfs_vnode {
     enum fsnode_type type;

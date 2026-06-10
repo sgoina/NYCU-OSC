@@ -211,27 +211,27 @@ unsigned long* get_pte(unsigned long *pgd, unsigned long va) {
 }
 
 // Free User page table
-void free_page_tables(unsigned long *pgd) {
-    if (!pgd)
+void free_page_tables(unsigned long *thread_pgd) {
+    if (!thread_pgd || thread_pgd == pgd)
         return;
     // 256 ~ 512 are kernel space, not to free
     for (int i = 0; i < 256; i++) {
-        if (pgd[i] & PTE_V) {
-            unsigned long *pmd = (unsigned long *)phys_to_virt((pgd[i] >> 10) << 12); // Get pmd base address
+        if (thread_pgd[i] & PTE_V) {
+            unsigned long *thread_pmd = (unsigned long *)phys_to_virt((thread_pgd[i] >> 10) << 12); // Get pmd base address
             for (int j = 0; j < ENTRIES_PER_TABLE; j++) {
-                if (pmd[j] & PTE_V) {
-                    unsigned long *pte = (unsigned long *)phys_to_virt((pmd[j] >> 10) << 12); // Get pte base address
+                if (thread_pmd[j] & PTE_V) {
+                    unsigned long *thread_pte = (unsigned long *)phys_to_virt((thread_pmd[j] >> 10) << 12); // Get pte base address
                     for (int k = 0; k < ENTRIES_PER_TABLE; k++) {
-                        if (pte[k] & PTE_V) {
-                            unsigned long pa = (pte[k] >> 10) << 12;
+                        if (thread_pte[k] & PTE_V) {
+                            unsigned long pa = (thread_pte[k] >> 10) << 12;
                             free((void *)phys_to_virt(pa));
                         }
                     }
-                    free((void *)pte);
+                    free((void *)thread_pte);
                 }
             }
-            free((void *)pmd);
+            free((void *)thread_pmd);
         }
     }
-    free((void *)pgd);
+    free((void *)thread_pgd);
 }

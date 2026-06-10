@@ -13,7 +13,7 @@ struct tmpfs_vnode {
     struct vnode* entry[TMPFS_MAX_DIR_ENTRY]; // For FS_DIR
     char* data; // For FS_FILE
     size_t size; // For FS_FILE
-    int dev_id; // For FS_DEVICE
+    int dev_id; // For FS_DEVICE, -1 for not a device node
 };
 
 int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt);

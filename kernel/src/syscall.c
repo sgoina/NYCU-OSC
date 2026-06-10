@@ -293,84 +293,65 @@ void* sys_mmap(void *addr, unsigned long length, int prot, int flags) {
 }
 
 // 14: open
-long sys_open(const char *pathname, int flags) {
-    if (pathname == NULL) return -1;
-    
+int sys_open(const char *pathname, int flags) {
+    if (pathname == NULL)
+        return -1;
     struct task_struct *curr = get_current();
-    
-    // 尋找 FDT 空位
+    // Find empty entry in file descriptor table
     int fd = -1;
-    for (int i = 0; i < MAX_FS; i++) {
+    for (int i = 0; i < MAX_FD; i++) {
         if (curr->fdt[i] == NULL) {
             fd = i;
             break;
         }
     }
-    
-    if (fd == -1) {
-        return -1; // FDT 滿了 (Too many open files)
-    }
+    if (fd == -1)
+        return -1; // Too many open files
     
     struct file *target_file = NULL;
-    // 注意：在完整 Multitask 中，vfs_open 需要知道當前行程的 pwd 和 root
-    // 我們假設你稍後會修改 vfs_open 或 vfs_lookup 來支援 pwd
     int ret = vfs_open(pathname, flags, &target_file);
     
-    if (ret != 0 || target_file == NULL) {
-        return -1; // 開啟失敗
-    }
+    if (ret != 0 || target_file == NULL)
+        return -1; // Failed
     
-    // 將 file 指標存入 FDT，並設定參考計數
+    // update file descriptor table and return file descriptor index
     curr->fdt[fd] = target_file;
-    
     return fd;
 }
 
 // 15: close
-long sys_close(int fd) {
+int sys_close(int fd) {
     struct task_struct *curr = get_current();
-    
-    // 檢查 fd 是否合法
-    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
-        return -1; // Bad file descriptor
-    }
+    // Check fd is valid
+    if (fd < 0 || fd >= MAX_FD || curr->fdt[fd] == NULL)
+        return -1;
     
     struct file *file_to_close = curr->fdt[fd];
-    curr->fdt[fd] = NULL; // 先把 FDT 欄位清空，避免 Race Condition
+    curr->fdt[fd] = NULL;
     
-    // 呼叫底層 vfs_close (需處理 f_count)
     return vfs_close(file_to_close);
 }
 
 // 16: read
 long sys_read(int fd, void *buf, unsigned long count) {
-    if (buf == NULL) return -1;
+    if (buf == NULL)
+        return -1;
     struct task_struct *curr = get_current();
-    
-    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
-        return -1; // Bad file descriptor
+    // Check fd is valid
+    if (fd < 0 || fd >= MAX_FD || curr->fdt[fd] == NULL) {
+        return -1;
     }
     
-    // 透過 fd 取得 file struct，並呼叫 vfs_read
     return vfs_read(curr->fdt[fd], buf, count);
 }
 
 // 17: write
 long sys_write(int fd, const void *buf, unsigned long count) {
-    if (buf == NULL) return -1;
+    if (buf == NULL)
+        return -1;
     struct task_struct *curr = get_current();
-    
-    // 你可能會有標準輸出的特例處理
-    // 例如：如果作業要求 stdout (fd=1) 直接印到 UART
-    /*
-    if (fd == 1 || fd == 2) {
-        return sys_uart_write((const char*)buf, count);
-    }
-    */
-    // (如果作業後面有規定 stdin/stdout 要掛在 /dev/uart 上，那上面這段特例就不用寫，
-    // 會交給 vfs_write 裡面底層的 /dev/uart write 處理)
-
-    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+    // Check fd is valid
+    if (fd < 0 || fd >= MAX_FD || curr->fdt[fd] == NULL) {
         return -1; 
     }
     
@@ -378,39 +359,34 @@ long sys_write(int fd, const void *buf, unsigned long count) {
 }
 
 // 18: mkdir
-long sys_mkdir(const char *pathname, unsigned int mode) {
-    if (pathname == NULL) return -1;
-    
-    // 作業說明表示可以忽略 mode 參數
-    // vfs_mkdir 需要能解析相對路徑 (基於 curr->pwd)
+int sys_mkdir(const char *pathname, unsigned int mode) {
+    if (pathname == NULL)
+        return -1;
+    // ignore mode
     return vfs_mkdir(pathname);
 }
 
 // 19: mount
-long sys_mount(const char *src, const char *target, const char *filesystem, unsigned long flags, const void *data) {
-    if (target == NULL || filesystem == NULL) return -1;
-    
-    // 忽略 src, flags, data，直接呼叫 vfs_mount
+int sys_mount(const char *src, const char *target, const char *filesystem, unsigned long flags, const void *data) {
+    if (target == NULL || filesystem == NULL)
+        return -1;
+    // ignore src, flags, data
     return vfs_mount(target, filesystem);
 }
 
 // 20: chdir
-long sys_chdir(const char *path) {
-    if (path == NULL) return -1;
+int sys_chdir(const char *path) {
+    if (path == NULL)
+        return -1;
     struct task_struct *curr = get_current();
-    
+    // Find the target node for changing directory
     struct vnode *target_dir;
-    // vfs_lookup 會根據路徑找到對應的 vnode
-    if (vfs_lookup(path, &target_dir) != 0) {
-        return -1; // 找不到該目錄
-    }
-    
-    // 檢查目標 vnode 是不是真的是一個目錄
-    // 假設你的 vnode 或 internal 有存放 type (如 FS_DIR)
+    if (vfs_lookup(path, &target_dir) != 0) 
+        return -1;
+    // Check the node is FS_DIR
     if (target_dir->v_ops->checkType(target_dir) != 0)
         return -1; 
-    
-    // 更新當前行程的工作目錄
+    // update pwd
     curr->pwd = target_dir;
     return 0;
 }
@@ -419,37 +395,34 @@ long sys_chdir(const char *path) {
 long sys_lseek64(int fd, long offset, int whence) {
     struct task_struct *curr = get_current();
     
-    // 檢查 fd 範圍與是否被開啟
-    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+    // check fd is valid
+    if (fd < 0 || fd >= MAX_FD || curr->fdt[fd] == NULL) 
         return -1; 
-    }
     
     struct file *file = curr->fdt[fd];
     
-    // 檢查這個檔案是否有實作 lseek64 (例如一般目錄可能就沒有)
-    if (file->f_ops->lseek64) {
+    // Avoid the file doesn't have lseek64()
+    if (file->f_ops->lseek64)
         return file->f_ops->lseek64(file, offset, whence);
-    }
     
-    return -1; // 不支援此操作
+    return -1;
 }
 
 // 22: ioctl
 long sys_ioctl(int fd, unsigned long request, void* arg) {
     struct task_struct *curr = get_current();
     
-    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+    // check fd is valid
+    if (fd < 0 || fd >= MAX_FD || curr->fdt[fd] == NULL)
         return -1; 
-    }
     
     struct file *file = curr->fdt[fd];
     
-    // 檢查是否有實作 ioctl (只有裝置檔案如 /dev/fb 會有)
-    if (file->f_ops->ioctl) {
+    // Avoid the file doesn't have ioctl()
+    if (file->f_ops->ioctl)
         return file->f_ops->ioctl(file, request, arg);
-    }
     
-    return -1; // 一般檔案不支援 ioctl
+    return -1;
 }
 
 void syscall_handler(struct pt_regs *regs) {
@@ -538,12 +511,12 @@ void syscall_handler(struct pt_regs *regs) {
 
         case 16: // read
             // a0 = fd, a1 = buf, a2 = count
-            ret = (void*)(long)sys_read((int)regs->a0, (void*)regs->a1, (unsigned long)regs->a2);
+            ret = (void*)sys_read((int)regs->a0, (void*)regs->a1, (unsigned long)regs->a2);
             break;
 
         case 17: // write
             // a0 = fd, a1 = buf, a2 = count
-            ret = (void*)(long)sys_write((int)regs->a0, (const void*)regs->a1, (unsigned long)regs->a2);
+            ret = (void*)sys_write((int)regs->a0, (const void*)regs->a1, (unsigned long)regs->a2);
             break;
 
         case 18: // mkdir
@@ -568,7 +541,7 @@ void syscall_handler(struct pt_regs *regs) {
 
         case 22: // ioctl
             // a0 = fd, a1 = request, a2 = *arg
-            ret = (void*)(long)sys_ioctl((int)regs->a0, (unsigned long)regs->a1, (void*)regs->a2);
+            ret = (void*)sys_ioctl((int)regs->a0, (unsigned long)regs->a1, (void*)regs->a2);
             break;
             
         default:
@@ -578,5 +551,5 @@ void syscall_handler(struct pt_regs *regs) {
             break;
     }
     // a0 = return value
-    regs->a0 = (unsigned long)ret;
+    regs->a0 = (long)ret;
 }

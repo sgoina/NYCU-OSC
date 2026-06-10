@@ -3,6 +3,7 @@
 
 #include "vfs.h"
 
+// Maximum number of devices
 #define MAX_DEVICES 16
 
 struct device_driver {

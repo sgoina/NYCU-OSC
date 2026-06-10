@@ -1,9 +1,12 @@
 #include "tmpfs.h"
 #include "vfs.h"
+#include "device.h"
 #include "string.h"
 #include "utils.h"
 #include "uart.h"
 #include "mem_alloc.h"
+
+extern struct device_driver device_list[MAX_DEVICES]; // device.c
 
 struct file_operations tmpfs_file_ops = { .open = tmpfs_open,
                                           .close = tmpfs_close,
@@ -20,23 +23,30 @@ struct vnode_operations tmpfs_vnode_ops = {.lookup = tmpfs_lookup,
                                            .checkType = tmpfs_is_dir_type
 };
 
+// create a vnode for tmpfs
 struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
-    // TODO: Implement this function
-    // 分配 vnode 記憶體
+    // Initialize vfs node
     struct vnode* v = (struct vnode*)allocate(sizeof(struct vnode));
+    if (v == NULL)
+        return NULL;
     v->mount = NULL;
     v->v_ops = &tmpfs_vnode_ops;
     v->f_ops = &tmpfs_file_ops;
     
-    // 分配 tmpfs 專用的內部節點結構
+    // Initialize tmpfs node
     struct tmpfs_vnode* internal = (struct tmpfs_vnode*)allocate(sizeof(struct tmpfs_vnode));
+    if (internal == NULL){
+        free(v);
+        return NULL;
+    }
     internal->type = type;
     memset(internal->name, 0, TMPFS_MAX_FILE_NAME);
-    memset(internal->entry, 0, sizeof(internal->entry)); // 將 entry 陣列初始化為 0 (NULL)
+    memset(internal->entry, 0, sizeof(internal->entry));
     internal->data = NULL;
     internal->size = 0;
+    internal->dev_id = -1;
     
-    // 綁定 internal
+    // set vnode->internal node to new tmpfs node
     v->internal = internal;
     
     return v;
@@ -44,7 +54,9 @@ struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
 
 int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
     mnt->root = tmpfs_create_vnode(FS_DIR);
-    mnt->root->parent = mnt->root; // 根目錄的 parent 指向自己
+    if (mnt->root == NULL)
+        return -1;
+    mnt->root->parent = mnt->root; // root's parent points to itself
     mnt->fs = fs;
     return 0;
 }
@@ -53,6 +65,18 @@ int tmpfs_open(struct vnode* file_node, struct file** target) {
     (*target)->vnode = file_node;
     (*target)->f_ops = &tmpfs_file_ops;
     (*target)->f_pos = 0;
+    
+    struct tmpfs_vnode* internal = (struct tmpfs_vnode*)file_node->internal;
+    // If the file is special file (device)
+    if (internal->type == FS_DEVICE) {
+        int dev_id = internal->dev_id;
+        if (dev_id >= 0 && dev_id < MAX_DEVICES && device_list[dev_id].f_ops != NULL)
+            (*target)->f_ops = device_list[dev_id].f_ops; // set file operations for device node
+        else
+            return -1;
+    } 
+    else
+        (*target)->f_ops = &tmpfs_file_ops; // set file operations for normal tmpfs file node 
     return 0;
 }
 
@@ -62,71 +86,70 @@ int tmpfs_close(struct file* file) {
 }
 
 int tmpfs_read(struct file* file, void* buf, size_t len) {
-    // TODO: Implement this function
+    if (file == NULL || buf == NULL)
+        return -1;
     struct tmpfs_vnode* inode = (struct tmpfs_vnode*)file->vnode->internal;
-    
-    // 如果沒有資料或 f_pos 已經超過檔案大小，表示無法讀取
-    if (inode->data == NULL || file->f_pos >= inode->size) {
+    // Check node is FS_FILE
+    if (inode->type != FS_FILE)
+        return -1; 
+    // Reach to EOF (End Of File), can't read anymore
+    if (inode->data == NULL || file->f_pos >= inode->size)
         return 0; 
-    }
     
-    // 計算實際可讀取的長度 (避免讀取超出檔案實際 size)
+    // Avoid over file size, recalculate length
     size_t readable = inode->size - file->f_pos;
-    if (len > readable) {
+    if (len > readable)
         len = readable;
-    }
     
-    // 將資料複製到 buf
     memcpy(buf, inode->data + file->f_pos, len);
-    
-    // 更新 file position
+    // update file position
     file->f_pos += len;
-    
     return len;
 }
 
 int tmpfs_write(struct file* file, const void* buf, size_t len) {
-    // TODO: Implement this function
+    if (file == NULL || buf == NULL)
+        return -1;
     struct tmpfs_vnode* inode = (struct tmpfs_vnode*)file->vnode->internal;
-    
-    // 如果是第一次寫入，為檔案分配資料空間
+    // Check node is FS_FILE
+    if (inode->type != FS_FILE)
+        return -1;
+    // If file position is over TMPFS_MAX_FILE_SIZE
+    if (file->f_pos >= TMPFS_MAX_FILE_SIZE) 
+        return -1;
+    // If it is first writing, allocate memory space
     if (inode->data == NULL) {
         inode->data = (char*)allocate(TMPFS_MAX_FILE_SIZE);
+        if (inode->data == NULL)
+            return -1; // Allocation failed
         memset(inode->data, 0, TMPFS_MAX_FILE_SIZE);
     }
     
-    // 【新增】如果已經寫滿或超過限制，直接回傳 0 (無法再寫入)
-    if (file->f_pos >= TMPFS_MAX_FILE_SIZE) {
-        return 0;
-    }
-    
-    // 檢查是否超出 tmpfs 單一檔案的最大容量限制
-    if (file->f_pos + len > TMPFS_MAX_FILE_SIZE) {
+    // Avoid over TMPFS_MAX_FILE_SIZE, recalculate length
+    if (file->f_pos + len > TMPFS_MAX_FILE_SIZE)
         len = TMPFS_MAX_FILE_SIZE - file->f_pos; 
-    }
     
-    // 寫入資料
     memcpy(inode->data + file->f_pos, buf, len);
-    
-    // 更新 file position
+    // update file position
     file->f_pos += len;
     
-    // 若目前的 f_pos 超過了原本記錄的檔案大小，更新檔案大小
-    if (file->f_pos > inode->size) {
+    // update file size
+    if (file->f_pos > inode->size)
         inode->size = file->f_pos;
-    }
-    
     return len;
 }
 
-int tmpfs_lookup(struct vnode* dir_node,
-                 struct vnode** target,
-                 const char* component_name) {
-    struct tmpfs_vnode* dentry = dir_node->internal;
+int tmpfs_lookup(struct vnode* dir_node, struct vnode** target, const char* component_name) {
+    if (!dir_node || !target || !component_name) 
+        return -1;
+    struct tmpfs_vnode* dentry = (struct tmpfs_vnode*)dir_node->internal;
+    // Check the node is FS_DIR 
+    if (dentry->type != FS_DIR)
+        return -1;
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (!dentry->entry[i])
             continue;
-        struct tmpfs_vnode* inode = dentry->entry[i]->internal;
+        struct tmpfs_vnode* inode = (struct tmpfs_vnode*)dentry->entry[i]->internal;
         if (!strcmp(inode->name, component_name)) {
             *target = dentry->entry[i];
             return 0;
@@ -135,91 +158,84 @@ int tmpfs_lookup(struct vnode* dir_node,
     return -1;
 }
 
-int tmpfs_create(struct vnode* dir_node,
-                 struct vnode** target,
-                 const char* component_name) {
-    // TODO: Implement this function
-    // 【新增防護】1. 檢查是否已經有同名檔案
+int tmpfs_create(struct vnode* dir_node, struct vnode** target, const char* component_name) {
+    // Avoid other nodes has same component_name
     struct vnode* check_node;
     if (tmpfs_lookup(dir_node, &check_node, component_name) == 0) {
-        // 如果 lookup 回傳 0，代表檔案已存在，必須 fail
         uart_puts("The file is existed. No should to create a new one in tmpfs.\n");
         return -1; 
     }
     
     struct tmpfs_vnode* dir_internal = (struct tmpfs_vnode*)dir_node->internal;
-    
-    // 尋找目錄 entry 中第一個空的位置
-    int free_idx = -1;
+    // Check the node is FS_DIR 
+    if (dir_internal->type != FS_DIR)
+        return -1;
+    int free_idx = -1; // Find empty entry for new node
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (dir_internal->entry[i] == NULL) {
             free_idx = i;
             break;
         }
     }
-    
-    // 如果目錄滿了，回傳錯誤
+    // Directory entries is fulled
     if (free_idx == -1) {
         uart_puts("Directory entries is fulled.\n");
         return -1;
     }
-
-    // 建立一個新的檔案節點 (FS_FILE)
+    // Generate a FS_FILE vnode
     struct vnode* new_vnode = tmpfs_create_vnode(FS_FILE);
-    new_vnode->parent = dir_node;
+    if (new_vnode == NULL)
+        return -1;
     struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
+    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1); // copy the file name for new tmpfs node
+    dir_internal->entry[free_idx] = new_vnode; // set new tmpfs node in parent's entry
+    new_vnode->parent = dir_node;
     
-    // 複製檔名
-    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
-    
-    // 註冊至 parent directory 的 entry 中
-    dir_internal->entry[free_idx] = new_vnode;
-    
-    // 將新建的 vnode 透過 target 回傳給 caller
-    *target = new_vnode;
-    
+    if (target != NULL)
+        *target = new_vnode;
     return 0;
 }
 
 int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* component_name) {
-    // 1. 檢查是否已經有同名檔案或目錄存在
+    // Avoid other nodes has same component_name
     struct vnode* check_node;
-    if (tmpfs_lookup(dir_node, &check_node, component_name) == 0) {
-        return -1; // 名稱已被佔用
+    if (tmpfs_lookup(dir_node, &check_node, component_name) == 0){
+        uart_puts("The directory is existed. No should to create a new one in tmpfs.\n");
+        return -1;
     }
 
     struct tmpfs_vnode* dir_internal = (struct tmpfs_vnode*)dir_node->internal;
-    
-    // 2. 尋找父目錄 entry 中第一個空的位置
-    int free_idx = -1;
+    // Check the node is FS_DIR 
+    if (dir_internal->type != FS_DIR)
+        return -1;
+    int free_idx = -1; // Find empty entry for new node
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (dir_internal->entry[i] == NULL) {
             free_idx = i;
             break;
         }
     }
-    
-    if (free_idx == -1) return -1; // 目錄滿了
-
-    // 3. 建立一個新的「目錄」節點 (FS_DIR)
-    struct vnode* new_vnode = tmpfs_create_vnode(FS_DIR);
-    new_vnode->parent = dir_node;
-    struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
-    
-    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
-    // 如果你有實作確保字串結尾的習慣，可以在這裡強制加上 '\0'
-    
-    dir_internal->entry[free_idx] = new_vnode;
-    
-    if (target != NULL) {
-        *target = new_vnode;
+    // Directory entries is fulled
+    if (free_idx == -1) {
+        uart_puts("Directory entries is fulled.\n");
+        return -1;
     }
+    // Generate a FS_DIR vnode
+    struct vnode* new_vnode = tmpfs_create_vnode(FS_DIR);
+    if (new_vnode == NULL)
+        return -1;
+    struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_vnode->internal;
+    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1); // copy the directory name for new tmpfs node
+    dir_internal->entry[free_idx] = new_vnode; // set new tmpfs node in parent's entry
+    new_vnode->parent = dir_node;
     
+    if (target != NULL)
+        *target = new_vnode;
     return 0;
 }
 
 int tmpfs_mknod(struct vnode* dir_node, struct vnode** target, const char* component_name, int dev_id) {
-    // 1. 檢查是否已經有同名檔案
+    // Avoid other nodes has same component_name
     struct vnode* check_node;
     if (tmpfs_lookup(dir_node, &check_node, component_name) == 0) {
         uart_puts("Device name is already existed.\n");
@@ -227,39 +243,34 @@ int tmpfs_mknod(struct vnode* dir_node, struct vnode** target, const char* compo
     }
     
     struct tmpfs_vnode* dir_internal = (struct tmpfs_vnode*)dir_node->internal;
-    
-    // 2. 尋找目錄 entry 中第一個空的位置
-    int free_idx = -1;
+    // Check the node is FS_DIR 
+    if (dir_internal->type != FS_DIR)
+        return -1;
+    int free_idx = -1;  // Find empty entry for new node
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (dir_internal->entry[i] == NULL) {
             free_idx = i;
             break;
         }
     }
-    
-    // 如果目錄滿了，回傳錯誤
+    // Directory entries is fulled
     if (free_idx == -1) {
         uart_puts("Directory entries is fulled.\n");
         return -1;
     }
 
-    // 3. 建立新的 vnode，類型為 FS_DEVICE
+    // Generate a FS_DEVICE vnode
     struct vnode* new_node = tmpfs_create_vnode(FS_DEVICE); 
+    if (new_node == NULL)
+        return -1;
     struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_node->internal;
-    
-    // 4. 設定檔名與 Device ID
     strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
     new_internal->dev_id = dev_id;
     new_node->parent = dir_node;
-    
-    // 5. 放進父目錄的 entry 陣列中
     dir_internal->entry[free_idx] = new_node;
     
-    // 6. 回傳目標節點
-    if (target != NULL) {
+    if (target != NULL)
         *target = new_node;
-    }
-    
     return 0;
 }
 
