@@ -1,11 +1,6 @@
 #include "utils.h"
 #include "video.h"
-#include "vm.h"
 
-#define FB_BASE_PA  0x7f700000
-#define FB_BASE_VA  (FB_BASE_PA + PAGE_OFFSET)
-#define FB_WIDTH  1920
-#define FB_HEIGHT 1080
 #define CACHE_BLOCK_SIZE 64
 
 // Ensure the display hardware reads the latest data from DRAM rather than stale cache.
@@ -21,7 +16,7 @@
 
 
 // flush cache
-static void flush_dcache(void* addr, unsigned long len) {
+void flush_dcache(void* addr, unsigned long len) {
     unsigned long start = (unsigned long)addr & ~(CACHE_BLOCK_SIZE - 1); //align
     __sync_synchronize(); //Memory Barrier
     for (unsigned long line = start; line < (unsigned long)addr + len;line += CACHE_BLOCK_SIZE) {

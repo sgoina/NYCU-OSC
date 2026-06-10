@@ -12,12 +12,15 @@ extern void* cpio_address; // cpio.c
 struct file_operations ramfs_file_ops = { .open = ramfs_open,
                                           .close = ramfs_close,
                                           .read = ramfs_read, 
-                                          .write = ramfs_write  // 【強制攔截寫入】
+                                          .write = ramfs_write,  // 【強制攔截寫入】
+                                          .lseek64 = NULL,
+                                          .ioctl = NULL
 };
 
 struct vnode_operations ramfs_vnode_ops = { .lookup = ramfs_lookup,
                                             .create = ramfs_create, // 【強制攔截建立檔案】
                                             .mkdir = ramfs_mkdir,   // 【強制攔截建立目錄】
+                                            .mknod = NULL,
                                             .checkType = ramfs_is_dir_type
 };
 

@@ -5,15 +5,20 @@
 #include "uart.h"
 #include "mem_alloc.h"
 
-struct file_operations tmpfs_file_ops = {.open = tmpfs_open,
-                                         .close = tmpfs_close,
-                                         .read = tmpfs_read,
-                                         .write = tmpfs_write};
+struct file_operations tmpfs_file_ops = { .open = tmpfs_open,
+                                          .close = tmpfs_close,
+                                          .read = tmpfs_read,
+                                          .write = tmpfs_write,
+                                          .lseek64 = NULL,
+                                          .ioctl = NULL
+};
 
 struct vnode_operations tmpfs_vnode_ops = {.lookup = tmpfs_lookup,
                                            .create = tmpfs_create,
                                            .mkdir = tmpfs_mkdir,
-                                           .checkType = tmpfs_is_dir_type};
+                                           .mknod = tmpfs_mknod,
+                                           .checkType = tmpfs_is_dir_type
+};
 
 struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
     // TODO: Implement this function
@@ -208,6 +213,51 @@ int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* compo
     
     if (target != NULL) {
         *target = new_vnode;
+    }
+    
+    return 0;
+}
+
+int tmpfs_mknod(struct vnode* dir_node, struct vnode** target, const char* component_name, int dev_id) {
+    // 1. 檢查是否已經有同名檔案
+    struct vnode* check_node;
+    if (tmpfs_lookup(dir_node, &check_node, component_name) == 0) {
+        uart_puts("Device name is already existed.\n");
+        return -1; 
+    }
+    
+    struct tmpfs_vnode* dir_internal = (struct tmpfs_vnode*)dir_node->internal;
+    
+    // 2. 尋找目錄 entry 中第一個空的位置
+    int free_idx = -1;
+    for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
+        if (dir_internal->entry[i] == NULL) {
+            free_idx = i;
+            break;
+        }
+    }
+    
+    // 如果目錄滿了，回傳錯誤
+    if (free_idx == -1) {
+        uart_puts("Directory entries is fulled.\n");
+        return -1;
+    }
+
+    // 3. 建立新的 vnode，類型為 FS_DEVICE
+    struct vnode* new_node = tmpfs_create_vnode(FS_DEVICE); 
+    struct tmpfs_vnode* new_internal = (struct tmpfs_vnode*)new_node->internal;
+    
+    // 4. 設定檔名與 Device ID
+    strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
+    new_internal->dev_id = dev_id;
+    new_node->parent = dir_node;
+    
+    // 5. 放進父目錄的 entry 陣列中
+    dir_internal->entry[free_idx] = new_node;
+    
+    // 6. 回傳目標節點
+    if (target != NULL) {
+        *target = new_node;
     }
     
     return 0;

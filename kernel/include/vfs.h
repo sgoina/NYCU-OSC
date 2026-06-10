@@ -4,7 +4,7 @@
 
 #define O_CREAT 00000100
 
-enum fsnode_type { FS_DIR, FS_FILE };
+enum fsnode_type { FS_DIR, FS_FILE, FS_DEVICE};
 
 struct vnode {
     struct mount* mount;
@@ -38,12 +38,15 @@ struct file_operations {
     int (*close)(struct file* file);
     int (*read)(struct file* file, void* buf, size_t len);
     int (*write)(struct file* file, const void* buf, size_t len);
+    long (*lseek64) (struct file* file, long offset, int whence);
+    int (*ioctl) (struct file* file, unsigned long request, void* arg);
 };
 
 struct vnode_operations {
     int (*lookup)(struct vnode* dir_node, struct vnode** target, const char* component_name);
     int (*create)(struct vnode* dir_node, struct vnode** target, const char* component_name);
     int (*mkdir)(struct vnode* dir_node, struct vnode** target, const char* component_name);
+    int (*mknod)(struct vnode* dir_node, struct vnode** target, const char* component_name, int dev_id);
     int (*checkType)(struct vnode* target);
 };
 
@@ -56,6 +59,8 @@ int vfs_write(struct file* file, const void* buf, size_t len);
 int vfs_mkdir(const char* pathname);
 int vfs_mount(const char* target, const char* filesystem);
 int vfs_lookup(const char* pathname, struct vnode** target);
+int vfs_mknod(const char* pathname, int dev_id);
+
 
 #endif // VFS_H
 

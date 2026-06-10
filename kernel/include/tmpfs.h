@@ -10,9 +10,10 @@
 struct tmpfs_vnode {
     enum fsnode_type type;
     char name[TMPFS_MAX_FILE_NAME];
-    struct vnode* entry[TMPFS_MAX_DIR_ENTRY];
-    char* data;
-    size_t size;
+    struct vnode* entry[TMPFS_MAX_DIR_ENTRY]; // For FS_DIR
+    char* data; // For FS_FILE
+    size_t size; // For FS_FILE
+    int dev_id; // For FS_DEVICE
 };
 
 int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt);
@@ -23,6 +24,7 @@ int tmpfs_write(struct file* file, const void* buf, size_t len);
 int tmpfs_lookup(struct vnode* dir_node, struct vnode** target, const char* component_name);
 int tmpfs_create(struct vnode* dir_node, struct vnode** target, const char* component_name);
 int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int tmpfs_mknod(struct vnode* dir_node, struct vnode** target, const char* component_name, int dev_id);
 int tmpfs_is_dir_type(struct vnode* target);
                  
 #endif // TMPFS_H

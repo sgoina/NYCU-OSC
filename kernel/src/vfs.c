@@ -1,7 +1,7 @@
 #include "vfs.h"
 #include "tmpfs.h"
 #include "ramfs.h"
-#include "devfs.h"
+#include "device.h"
 #include "string.h"
 #include "utils.h"
 #include "mem_alloc.h"
@@ -13,6 +13,7 @@
 
 struct mount* rootfs;
 struct filesystem fs_list[MAX_FS];
+extern struct device_driver device_list[MAX_DEVICES]; // device.c
 
 void init_vfs(){
     rootfs = allocate(sizeof(struct mount));
@@ -28,13 +29,16 @@ void init_vfs(){
     // 掛載 ramfs 到 /ramfs
     vfs_mount("/ramfs", "ramfs");
     
-    // 3. 註冊 devfs
-    struct filesystem devfs_fs = {.name = "devfs", .setup_mount = devfs_setup_mount};
-    register_filesystem(&devfs_fs);
-    // 在 rootfs 建立 /dev 目錄
-    vfs_mkdir("/dev"); 
-    // 掛載 devfs 到 /dev
-    vfs_mount("/dev", "devfs");
+    // 2. 註冊硬體驅動程式，取得 Device ID
+    int uart_id = register_device("uart");
+    int fb_id   = register_device("framebuffer");
+    
+    // 3. 建立 /dev 目錄 (它現在只是 tmpfs 裡的一個普通資料夾) 
+    vfs_mkdir("/dev");
+    
+    // 4. 透過 mknod 創造裝置節點！ [cite: 381, 382]
+    vfs_mknod("/dev/uart", uart_id);
+    vfs_mknod("/dev/fb", fb_id);
 }
 
 int register_filesystem(struct filesystem* fs) {
@@ -95,7 +99,34 @@ int vfs_open(const char* pathname, int flags, struct file** target) {
     (*target) = allocate(sizeof(struct file));
     (*target)->flags = flags;
     (*target)->f_count = 1;
+    // 1. 先讓底層檔案系統完成基本的初始化 (例如 tmpfs_open 會設定 f_pos = 0 與 vnode 綁定)
     vnode->f_ops->open(vnode, target);
+    
+    // ==========================================
+    // 2. 【核心新增邏輯】：檢查並替換裝置操作介面
+    // ==========================================
+    // 因為目前只有 tmpfs 支援 mknod，我們可以直接轉型檢查 internal type
+    struct tmpfs_vnode* internal = (struct tmpfs_vnode*)vnode->internal;
+    
+    if (internal->type == FS_DEVICE) {
+        int dev_id = internal->dev_id; // 取得 mknod 時設定的 Device ID
+        
+        // 確保 ID 合法
+        if (dev_id >= 0 && dev_id < MAX_DEVICES) {
+            // 移花接木：把 tmpfs_file_ops 換成該硬體專屬的介面 (例如 devfs_uart_ops)
+            (*target)->f_ops = device_list[dev_id].f_ops;
+            
+            // (選用) 如果該硬體自己有特殊的 open 初始化需求，可以再次呼叫
+            // if ((*target)->f_ops->open) {
+            //     (*target)->f_ops->open(vnode, target);
+            // }
+        } else {
+            // 不合法的 Device ID
+            free(*target);
+            return -1; 
+        }
+    }
+    // ==========================================
     return 0;
 }
 
@@ -210,7 +241,7 @@ int vfs_mount(const char* target, const char* filesystem) {
     mnt->fs = fs;
 
     // 4. 呼叫檔案系統的 setup_mount
-    // 這會通知 tmpfs (或其他檔案系統) 初始化它自己的狀態，
+    // 這會通知檔案系統 初始化它自己的狀態，
     // 並把它專屬的 root vnode 綁定到 mnt->root 上。
     if (fs->setup_mount(fs, mnt) != 0) {
         free(mnt);
@@ -298,4 +329,48 @@ int vfs_lookup(const char* pathname, struct vnode** target) {
 
     *target = node;
     return 0;
+}
+
+int vfs_mknod(const char* pathname, int dev_id) {
+    if (pathname == NULL) return -1;
+
+    // 1. 找出最後一個 '/' 的位置，用來切割 dirname 和 filename
+    int pos = -1;
+    int len = strlen(pathname);
+    for (int i = 0; i < len; i++) {
+        if (pathname[i] == '/') {
+            pos = i;
+        }
+    }
+
+    char dirname[PATH_MAX] = {0};
+    const char* filename;
+
+    // 2. 字串切割
+    if (pos == -1) {
+        strcpy(dirname, "."); 
+        filename = pathname;
+    } else if (pos == 0) {
+        strcpy(dirname, "/");
+        filename = pathname + 1;
+    } else {
+        strncpy(dirname, pathname, pos);
+        dirname[pos] = '\0';
+        filename = pathname + pos + 1;
+    }
+
+    // 3. 尋找父目錄的 vnode
+    struct vnode* parent_vnode;
+    if (vfs_lookup(dirname, &parent_vnode) != 0) {
+        return -1; // 找不到父目錄 (例如 /dev 還沒被建立)
+    }
+
+    // 防呆：檢查底層檔案系統有沒有實作 mknod (例如 ramfs 唯讀，可能就沒實作)
+    if (parent_vnode->v_ops->mknod == NULL) {
+        return -1; 
+    }
+
+    // 4. 呼叫底層實作建立特殊節點
+    struct vnode* target_node;
+    return parent_vnode->v_ops->mknod(parent_vnode, &target_node, filename, dev_id);
 }

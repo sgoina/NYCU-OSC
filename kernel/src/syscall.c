@@ -8,6 +8,7 @@
 #include "utils.h"
 #include "video.h"
 #include "vm.h"
+#include "vfs.h"
 
 #define align(size, align_val) (((size) + (align_val) - 1) & ~((align_val) - 1))
 
@@ -414,6 +415,43 @@ long sys_chdir(const char *path) {
     return 0;
 }
 
+// 21: lseek64
+long sys_lseek64(int fd, long offset, int whence) {
+    struct task_struct *curr = get_current();
+    
+    // 檢查 fd 範圍與是否被開啟
+    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+        return -1; 
+    }
+    
+    struct file *file = curr->fdt[fd];
+    
+    // 檢查這個檔案是否有實作 lseek64 (例如一般目錄可能就沒有)
+    if (file->f_ops->lseek64) {
+        return file->f_ops->lseek64(file, offset, whence);
+    }
+    
+    return -1; // 不支援此操作
+}
+
+// 22: ioctl
+long sys_ioctl(int fd, unsigned long request, void* arg) {
+    struct task_struct *curr = get_current();
+    
+    if (fd < 0 || fd >= MAX_FS || curr->fdt[fd] == NULL) {
+        return -1; 
+    }
+    
+    struct file *file = curr->fdt[fd];
+    
+    // 檢查是否有實作 ioctl (只有裝置檔案如 /dev/fb 會有)
+    if (file->f_ops->ioctl) {
+        return file->f_ops->ioctl(file, request, arg);
+    }
+    
+    return -1; // 一般檔案不支援 ioctl
+}
+
 void syscall_handler(struct pt_regs *regs) {
     // a7 stores system call number
     unsigned long syscall_num = regs->a7;
@@ -521,6 +559,16 @@ void syscall_handler(struct pt_regs *regs) {
         case 20: // chdir
             // a0 = path
             ret = (void*)(long)sys_chdir((const char*)regs->a0);
+            break;
+            
+        case 21: // lseek64
+            // a0 = fd, a1 = offset, a2 = whence
+            ret = (void*)(long)sys_lseek64((int)regs->a0, (long)regs->a1, (int)regs->a2);
+            break;
+
+        case 22: // ioctl
+            // a0 = fd, a1 = request, a2 = *arg
+            ret = (void*)(long)sys_ioctl((int)regs->a0, (unsigned long)regs->a1, (void*)regs->a2);
             break;
             
         default:
