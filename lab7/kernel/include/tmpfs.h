@@ -1,0 +1,30 @@
+#ifndef TMPFS_H
+#define TMPFS_H
+
+#include "vfs.h"
+
+#define TMPFS_MAX_FILE_NAME 15
+#define TMPFS_MAX_DIR_ENTRY 16
+#define TMPFS_MAX_FILE_SIZE 4096
+
+struct tmpfs_vnode {
+    enum fsnode_type type;
+    char name[TMPFS_MAX_FILE_NAME];
+    struct vnode* entry[TMPFS_MAX_DIR_ENTRY]; // For FS_DIR
+    char* data; // For FS_FILE
+    size_t size; // For FS_FILE
+    int dev_id; // For FS_DEVICE, -1 for not a device node
+};
+
+int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt);
+int tmpfs_open(struct vnode* file_node, struct file** target);
+int tmpfs_close(struct file* file);
+int tmpfs_read(struct file* file, void* buf, size_t len);
+int tmpfs_write(struct file* file, const void* buf, size_t len);
+int tmpfs_lookup(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int tmpfs_create(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int tmpfs_mkdir(struct vnode* dir_node, struct vnode** target, const char* component_name);
+int tmpfs_mknod(struct vnode* dir_node, struct vnode** target, const char* component_name, int dev_id);
+int tmpfs_is_dir_type(struct vnode* target);
+                 
+#endif // TMPFS_H
