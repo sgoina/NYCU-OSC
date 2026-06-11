@@ -77,6 +77,8 @@ int dev_fb_read(struct file* file, void* buf, size_t len) {
 
 
 int dev_fb_write(struct file* file, const void* buf, size_t len) {
+    if (buf == NULL)
+        return -1;
     if (file->f_pos >= FB_SIZE)
         return 0;
 
@@ -106,6 +108,8 @@ long dev_fb_lseek64(struct file* file, long offset, int whence) {
 }
 
 int dev_fb_ioctl(struct file* file, unsigned long request, void* arg) {
+    if (arg == NULL)
+        return -1;
     if (request == FB_IOCTL_GET_INFO) { // return framebuffer info
         struct framebuffer_info* info = (struct framebuffer_info*)arg;
         info->width = FB_WIDTH;

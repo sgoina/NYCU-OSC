@@ -62,11 +62,13 @@ int tmpfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
 }
 
 int tmpfs_open(struct vnode* file_node, struct file** target) {
-    (*target)->vnode = file_node;
-    (*target)->f_ops = &tmpfs_file_ops;
-    (*target)->f_pos = 0;
-    
     struct tmpfs_vnode* internal = (struct tmpfs_vnode*)file_node->internal;
+    if (internal->type == FS_DIR) { // The node is FS_DIR, can't be file
+        uart_puts("Error: Is a directory.\n");
+        return -1; 
+    }
+    (*target)->vnode = file_node;
+    (*target)->f_pos = 0;
     // If the file is special file (device)
     if (internal->type == FS_DEVICE) {
         int dev_id = internal->dev_id;

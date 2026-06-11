@@ -497,7 +497,14 @@ void kill_zombies() {
 
             struct task_struct* zombie = curr;
             curr = curr->next;
-
+            // clear file descriptor table
+            for (int i = 0; i < MAX_FD; i++) {
+                if (zombie->fdt[i] != NULL) {
+                    struct file* file_to_close = zombie->fdt[i];
+                    zombie->fdt[i] = NULL;
+                    vfs_close(file_to_close); 
+                }
+            }
             if (zombie->kernel_stack)
                 free((void*)zombie->kernel_stack);
             if (zombie->user_stack)

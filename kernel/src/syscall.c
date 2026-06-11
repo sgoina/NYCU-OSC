@@ -409,7 +409,7 @@ long sys_lseek64(int fd, long offset, int whence) {
 }
 
 // 22: ioctl
-long sys_ioctl(int fd, unsigned long request, void* arg) {
+int sys_ioctl(int fd, unsigned long request, void* arg) {
     struct task_struct *curr = get_current();
     
     // check fd is valid
@@ -429,35 +429,35 @@ void syscall_handler(struct pt_regs *regs) {
     // a7 stores system call number
     unsigned long syscall_num = regs->a7;
     
-    void* ret = (void*)-1;
+    long ret = -1;
 
     switch (syscall_num) {
         case 0: // getpid
-            ret = (void*)sys_getpid();
+            ret = sys_getpid();
             break;
             
         case 1: // uart_read
             // a0 = *buf, a1 = count
-            ret = (void*)sys_uart_read((char*)regs->a0, regs->a1);
+            ret = sys_uart_read((char*)regs->a0, regs->a1);
             break;
             
         case 2: // uart_write
             // a0 = *buf, a1 = count
-            ret = (void*)sys_uart_write((const char*)regs->a0, regs->a1);
+            ret = sys_uart_write((const char*)regs->a0, regs->a1);
             break;
             
         case 3: // exec
             // a0 = *path
-            ret = (void*)sys_exec((const char*)regs->a0, regs);
+            ret = sys_exec((const char*)regs->a0, regs);
             break;
             
         case 4: // fork
-            ret = (void*)sys_fork(regs);
+            ret = sys_fork(regs);
             break;
             
         case 5: // waitpid
             // a0 = pid
-            ret = (void*)sys_waitpid(regs->a0);
+            ret = sys_waitpid(regs->a0);
             break;
             
         case 6: // exit
@@ -467,7 +467,7 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 7: // stop
             // a0 = pid
-            ret = (void*)(long)sys_stop(regs->a0);
+            ret = (long)sys_stop(regs->a0);
             break;
             
         case 8: // display
@@ -477,12 +477,12 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 9: // usleep
             // a0 = usec
-            ret = (void*)(long)sys_usleep((unsigned int)regs->a0);
+            ret = (long)sys_usleep((unsigned int)regs->a0);
             break;
             
         case 10: // signal
             // a0 = signum, a1 = *handler
-            ret = (void*)sys_signal((int)regs->a0, (void *)regs->a1); // ret value ignored
+            ret = sys_signal((int)regs->a0, (void *)regs->a1); // ret value ignored
             break;
                         
         case 11: // sigreturn
@@ -491,57 +491,57 @@ void syscall_handler(struct pt_regs *regs) {
             
         case 12: // kill
             // a0 = pid, a1 = signum
-            ret = (void*)(long)sys_kill((int)regs->a0, (int)regs->a1); 
+            ret = (long)sys_kill((int)regs->a0, (int)regs->a1); 
             break;
             
         case 13: // mmap
             // a0 = addr, a1 = length, a2 = prot, a3 = flags
-            ret = (void*)sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
+            ret = (long)sys_mmap((void *)regs->a0, (unsigned long)regs->a1, (int)regs->a2, (int)regs->a3); 
             break;
             
         case 14: // open
             // a0 = pathname, a1 = flags
-            ret = (void*)(long)sys_open((const char*)regs->a0, (int)regs->a1);
+            ret = (long)sys_open((const char*)regs->a0, (int)regs->a1);
             break;
 
         case 15: // close
             // a0 = fd
-            ret = (void*)(long)sys_close((int)regs->a0);
+            ret = (long)sys_close((int)regs->a0);
             break;
 
         case 16: // read
             // a0 = fd, a1 = buf, a2 = count
-            ret = (void*)sys_read((int)regs->a0, (void*)regs->a1, (unsigned long)regs->a2);
+            ret = sys_read((int)regs->a0, (void*)regs->a1, (unsigned long)regs->a2);
             break;
 
         case 17: // write
             // a0 = fd, a1 = buf, a2 = count
-            ret = (void*)sys_write((int)regs->a0, (const void*)regs->a1, (unsigned long)regs->a2);
+            ret = sys_write((int)regs->a0, (const void*)regs->a1, (unsigned long)regs->a2);
             break;
 
         case 18: // mkdir
             // a0 = pathname, a1 = mode
-            ret = (void*)(long)sys_mkdir((const char*)regs->a0, (unsigned int)regs->a1);
+            ret = (long)sys_mkdir((const char*)regs->a0, (unsigned int)regs->a1);
             break;
 
         case 19: // mount
             // a0 = src, a1 = target, a2 = filesystem, a3 = flags, a4 = data
-            ret = (void*)(long)sys_mount((const char*)regs->a0, (const char*)regs->a1, (const char*)regs->a2, (unsigned long)regs->a3, (const void*)regs->a4);
+            ret = (long)sys_mount((const char*)regs->a0, (const char*)regs->a1, (const char*)regs->a2, (unsigned long)regs->a3, (const void*)regs->a4);
             break;
 
         case 20: // chdir
             // a0 = path
-            ret = (void*)(long)sys_chdir((const char*)regs->a0);
+            ret = (long)sys_chdir((const char*)regs->a0);
             break;
             
         case 21: // lseek64
             // a0 = fd, a1 = offset, a2 = whence
-            ret = (void*)(long)sys_lseek64((int)regs->a0, (long)regs->a1, (int)regs->a2);
+            ret = sys_lseek64((int)regs->a0, (long)regs->a1, (int)regs->a2);
             break;
 
         case 22: // ioctl
             // a0 = fd, a1 = request, a2 = *arg
-            ret = (void*)sys_ioctl((int)regs->a0, (unsigned long)regs->a1, (void*)regs->a2);
+            ret = (long)sys_ioctl((int)regs->a0, (unsigned long)regs->a1, (void*)regs->a2);
             break;
             
         default:
@@ -551,5 +551,5 @@ void syscall_handler(struct pt_regs *regs) {
             break;
     }
     // a0 = return value
-    regs->a0 = (long)ret;
+    regs->a0 = ret;
 }

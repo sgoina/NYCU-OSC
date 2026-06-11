@@ -107,6 +107,11 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
 }
 
 int ramfs_open(struct vnode* file_node, struct file** target) {
+    struct ramfs_vnode* internal = (struct ramfs_vnode*)file_node->internal;
+    if (internal->type == FS_DIR) { // The node is FS_DIR, can't be file
+        uart_puts("Error: Is a directory.\n");
+        return -1; 
+    }
     (*target)->vnode = file_node;
     (*target)->f_ops = &ramfs_file_ops; 
     (*target)->f_pos = 0;

@@ -73,6 +73,8 @@ int vfs_open(const char* pathname, int flags, struct file** target) {
                 filename = pathname + 1; // +1 for skip '/'
             }
             else {
+                if (pos >= PATH_MAX)
+                    return -1; // directory name is over limit 
                 strncpy(dirname, pathname, pos);
                 dirname[pos] = '\0';
                 filename = pathname + pos + 1; // +1 for skip '/'
@@ -157,6 +159,8 @@ int vfs_mkdir(const char* pathname) {
         newdir_name = pathname + 1; // +1 for skip '/'
     } 
     else {
+        if (pos >= PATH_MAX)
+            return -1; // directory name is over limit 
         strncpy(dirname, pathname, pos);
         dirname[pos] = '\0';
         newdir_name = pathname + pos + 1; // +1 for skip '/'
@@ -178,6 +182,11 @@ int vfs_mount(const char* target, const char* filesystem) {
     struct vnode* target_node; // Find the mounted vnode
     if (vfs_lookup(target, &target_node) != 0)
         return -1;
+        
+    // Check the vnode is FS_DIR
+    if (target_node->v_ops->checkType(target_node) != 0)
+        return -1;
+
 
     // Avoid this vnode has been mounted
     if (target_node->mount != NULL)
@@ -252,6 +261,8 @@ int vfs_lookup(const char* pathname, struct vnode** target) {
 
         // cut the next component
         while (pathname[i] != '/' && pathname[i] != '\0') {
+            if (idx >= PATH_MAX - 1)
+                return -1; // component name is over limit
             component[idx++] = pathname[i++];
         }
         component[idx] = '\0';
@@ -308,6 +319,8 @@ int vfs_mknod(const char* pathname, int dev_id) {
         filename = pathname + 1; // +1 for skip '/'
     }
     else {
+        if (pos >= PATH_MAX)
+            return -1; // directory name is over limit 
         strncpy(dirname, pathname, pos);
         dirname[pos] = '\0';
         filename = pathname + pos + 1;  // +1 for skip '/'
@@ -316,6 +329,10 @@ int vfs_mknod(const char* pathname, int dev_id) {
     // Find parent vnode
     struct vnode* parent_vnode;
     if (vfs_lookup(dirname, &parent_vnode) != 0)
+        return -1;
+    
+    // Check parent vnode is FS_DIR
+    if (parent_vnode->v_ops->checkType(parent_vnode) != 0)
         return -1;
 
     // Avoid underlying file system doesn't have mknod()
