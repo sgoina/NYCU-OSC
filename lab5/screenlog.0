@@ -1,0 +1,96 @@
+load
+Preparing to relocate Boot Loader...
+Relocation finished.
+Please run the Python code for loading kernel...
+Loading kernel, the Kernel Size: 0x0000000000006118
+Kernel loaded successfully! Jump to kernel: 0x0000000000200000
+New Kernel! New Kernel! New Kernel! New Kernel!
+File system initialization is successful!
+Memory address: 0x0000000000000000, size: 0x0000000080000000
+Kernel address: 0x0000000000200000, size: 0x000000000000b4d0
+DTB address: 0x000000007dd0f000, size: 0x000000000001c080
+Initramfs address: 0x000000007dd2e000, size: 0x000000007dd8f800
+--- Parsing /reserved-memory ---
+1. framebuffer@7f000000 begin: 0x000000007f000000, size: 0x0000000001000000
+2. mmode_resv0@0 begin: 0x0000000000000000, size: 0x0000000000080000
+3. mem@c0800000 begin: 0x00000000c0800000, size: 0x0000000000040000
+4. rcpu_mem_heap@30000000 begin: 0x0000000030000000, size: 0x0000000000200000
+5. vdev0vring0@30200000 begin: 0x0000000030200000, size: 0x0000000000003000
+6. vdev0vring1@30203000 begin: 0x0000000030203000, size: 0x0000000000003000
+7. vdev0buffer@30206000 begin: 0x0000000030206000, size: 0x00000000000f6000
+8. rsc_table@302fc000 begin: 0x00000000302fc000, size: 0x0000000000004000
+9. rcpu_mem_snapshots@30300000 begin: 0x0000000030300000, size: 0x0000000000040000
+10. rcpu_mem_dtb@30300000 begin: 0x0000000030340000, size: 0x0000000000040000
+11. dpu_reserved@2ff40000 begin: 0x000000002ff40000, size: 0x00000000000c0000
+[Startup Allocator] mem_map placed at: 0x000000000020c000, size: 0x0000000001000000
+--- Start Reserving Memory ---
+Reserve mem_map region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: Reserve recorded region: This region is not in allocable memory, so not need to reserve.
+free_area[10] 500
+free_area[9] 2
+free_area[8] 4
+free_area[7] 3
+free_area[6] 3
+free_area[5] 2
+free_area[4] 2
+free_area[3] 1
+free_area[2] 2
+free_area[1] 2
+free_area[0] 1
+OrangePi-RV2> exec osc 
+Can't find the file in CPIO to execute!
+OrangePi-RV2> exec osctest.bin
+process starts (pid = 2)
+OSC test user program
+$ fork
+I am the child process
+child pid: 3
+$ signal
+$ kill 3
+$ fork
+child pid: 4
+$ I am the child process
+kill 4
+$ 
+You can't kill me!
+
+Oh Nyo!!!
+This is sigreturn
+kill 4
+$ 
+You can't kill me!
+
+Oh Nyo!!!
+This is sigreturn
+kill 4
+$ 
+You can't kill me!
+
+Oh Nyo!!!
+This is sigreturn
+stop 4
+$ task
+error: invalid command!
+$ e fork_test
+Fork test (pid = 2)
+parent: pid = 2, child pid = 5
+child1: pid = 5, cnt = 1, &cnt = 0x000000007dd08e8c, sp = 0x000000007dd08e70
+child1: pid = 5, cnt = 2, &cnt = 0x000000007dd08e8c, sp = 0x000000007dd08e70
+child2: pid = 6, cnt = 2, &cnt = 0x000000007dd0be8c, sp = 0x000000007dd0be70
+child2: pid = 6, cnt = 3, &cnt = 0x000000007dd0be8c, sp = 0x000000007dd0be70
+child2: pid = 6, cnt = 4, &cnt = 0x000000007dd0be8c, sp = 0x000000007dd0be70
+OrangePi-RV2> task
+OrangePi-RV2> Process ID: 8 0
+Process ID: 9 0
+Process ID: 10 0
+Process ID: 8 1
+Process ID: 9 1
+Process ID: 10 1
+Process ID: 8 2
+Process ID: 9 2
+Process ID: 10 2
+Process ID: 8 3
+Process ID: 9 3
+Process ID: 10 3
+Process ID: 8 4
+Process ID: 9 4
+Process ID: 10 4
